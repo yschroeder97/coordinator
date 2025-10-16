@@ -87,6 +87,43 @@ impl std::fmt::Display for DataType {
     }
 }
 
+/// Zero-cost marker traits for encoding table and operation types at compile time.
+/// These are used by the error handling system to provide type-safe context about
+/// which table and operation a database request targets.
+pub mod tags {
+    /// Marker trait for table types
+    pub trait TableTag {}
+
+    /// Marker trait for operation types
+    pub trait OperationTag {}
+
+    // Table type markers
+    pub struct WorkerTable;
+    pub struct LogicalSourceTable;
+    pub struct PhysicalSourceTable;
+    pub struct SinkTable;
+    pub struct QueryTable;
+    pub struct QueryFragmentTable;
+
+    impl TableTag for WorkerTable {}
+    impl TableTag for LogicalSourceTable {}
+    impl TableTag for PhysicalSourceTable {}
+    impl TableTag for SinkTable {}
+    impl TableTag for QueryTable {}
+    impl TableTag for QueryFragmentTable {}
+
+    // Operation type markers
+    pub struct Create;
+    pub struct Drop;
+    pub struct Select;
+    pub struct Update;
+
+    impl OperationTag for Create {}
+    impl OperationTag for Drop {}
+    impl OperationTag for Select {}
+    impl OperationTag for Update {}
+}
+
 pub type FieldName = String;
 pub type AttributeField = (FieldName, DataType);
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,7 +132,7 @@ pub struct Schema {
 }
 
 impl Schema {
-    pub fn new(fields: Vec<AttributeField>) -> Schema {
+    pub fn with(fields: Vec<AttributeField>) -> Schema {
         assert!(
             !fields.is_empty(),
             "Cannot construct Schema with empty fields"
@@ -110,7 +147,13 @@ pub struct Worker {
     pub host_name: HostName,
     pub grpc_port: u16,
     pub data_port: u16,
-    pub num_slots: Option<u32>,
+    pub num_slots: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkLink {
+    pub source_host: HostName,
+    pub target_host: HostName,
 }
 
 pub type LogicalSourceName = String;

@@ -35,7 +35,7 @@ impl Database {
         Ok(Database { pool })
     }
 
-    pub async fn create_worker(&self, worker: &CreateWorker) -> Result<(), DatabaseError> {
+    pub async fn insert_worker(&self, worker: &CreateWorker) -> Result<(), DatabaseError> {
         sqlx::query!(
             "INSERT INTO workers (host_name, grpc_port, data_port, num_slots) VALUES (?, ?, ?, ?)",
             worker.host_name,
@@ -50,7 +50,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn create_logical_source(&self, logical: &CreateLogicalSource) -> Result<(), DatabaseError> {
+    pub async fn insert_logical_source(&self, logical: &CreateLogicalSource) -> Result<(), DatabaseError> {
         let schema_json = serde_json::to_value(&logical.schema).map_err(|e| {
             DatabaseError::SerializationError {
                 reason: e.to_string(),
@@ -69,7 +69,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn create_physical_source(
+    pub async fn insert_physical_source(
         &self,
         physical: &CreatePhysicalSource,
     ) -> Result<(), DatabaseError> {
@@ -86,7 +86,7 @@ impl Database {
         let source_type = physical.source_type.to_string();
 
         sqlx::query!(
-            "INSERT INTO physical_sources (logical_source, placement, source_type, source_config, parser_config) 
+            "INSERT INTO physical_sources (logical_source, placement, source_type, source_config, parser_config)
              VALUES (?, ?, ?, ?, ?)",
             physical.logical_source,
             physical.placement,
@@ -101,7 +101,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn create_sink(&self, sink: &CreateSink) -> Result<(), DatabaseError> {
+    pub async fn insert_sink(&self, sink: &CreateSink) -> Result<(), DatabaseError> {
         let config_json =
             serde_json::to_string(&sink.config).map_err(|e| DatabaseError::SerializationError {
                 reason: e.to_string(),
@@ -123,7 +123,6 @@ impl Database {
     }
 
     pub async fn create_query(&self, query: &CreateQuery) -> Result<(), DatabaseError> {
-
         sqlx::query!(
             "INSERT INTO queries (id, statement, sink) VALUES (?, ?, ?)",
             query.id,
@@ -139,7 +138,7 @@ impl Database {
 }
 
 #[cfg(test)]
-mod tests {
+mod db_tests {
     use crate::data_model::{DataType, Schema, SourceType};
     use super::*;
     use crate::db_errors::DatabaseError;
@@ -150,16 +149,16 @@ mod tests {
         let db = Database::from_pool(pool);
         let duplicate = CreateLogicalSource {
             source_name: "src".to_string(),
-            schema: Schema::new(vec![("ts".to_string(), DataType::UINT64)]),
+            schema: Schema::with(vec![("ts".to_string(), DataType::UINT64)]),
         };
-        let res = db.create_logical_source(&duplicate).await;
+        let result = db.insert_logical_source(&duplicate).await;
         
-        assert!(matches!(res, Err(DatabaseError::LogicalSourceAlreadyExists { name }) if name == "src"));
+        assert!(matches!(result, Err(DatabaseError::LogicalSourceAlreadyExists { name }) if name == "src"));
         Ok(())
     }
 
     #[sqlx::test]
-    async fn physical_without_logical(pool: SqlitePool) -> sqlx::Result<()> {
+    async fn physical_without_logical_and_worker(pool: SqlitePool) -> sqlx::Result<()> {
         let db = Database::from_pool(pool);
         let missing_logical = CreatePhysicalSource {
             logical_source: "unknown".to_string(),
@@ -168,8 +167,8 @@ mod tests {
             source_config: Default::default(),
             parser_config: Default::default(),
         };
-        let result = db.create_physical_source(&missing_logical).await;
-        assert!(matches!(result, Err(DatabaseError::LogicalSourceNotFoundForPhysical { logical_source_name }) if logical_source_name == "unknown"));
+        let result = db.insert_physical_source(&missing_logical).await;
+        assert!(matches!(result, Err(DatabaseError::Database(_))));
 
         let missing_placement = CreatePhysicalSource {
             logical_source: "src".to_string(),
@@ -178,8 +177,8 @@ mod tests {
             source_config: Default::default(),
             parser_config: Default::default(),
         };
-        let result = db.create_physical_source(&missing_placement).await;
-        assert!(matches!(result, Err(DatabaseError::WorkerNotFoundForPhysical { host_name: "unknown" })));
+        let result = db.insert_physical_source(&missing_placement).await;
+        assert!(matches!(result, Err(DatabaseError::Database(_))));
         Ok(())
     }
 }

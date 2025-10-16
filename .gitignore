@@ -3,3 +3,5 @@ Cargo.lock
 /.claude
 /.sqlx
 /.idea
+*.db
+CLAUDE.md

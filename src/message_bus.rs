@@ -158,10 +158,7 @@ mod message_bus_test {
                 msgs.into_iter().next().unwrap()
             {
                 assert_eq!(req.payload.source_name, "source");
-                let response = Ok(LogicalSource {
-                    name: "source".to_string(),
-                    schema: Schema::new(vec![("ts".to_string(), DataType::UINT64)]),
-                });
+                let response = Ok(());
                 req.respond(response).unwrap();
             } else {
                 panic!("Expected request, got event");
@@ -171,13 +168,11 @@ mod message_bus_test {
         let result = tx
             .ask_blocking(CreateLogicalSource {
                 source_name: "source".to_string(),
-                schema: Schema::new(vec![]),
+                schema: Schema::with(vec![("ts".to_string(), DataType::UINT64)]),
             })
             .unwrap();
 
         assert!(result.is_ok());
-        let source = result.unwrap();
-        assert_eq!(source.name, "source");
     }
 
     #[test]

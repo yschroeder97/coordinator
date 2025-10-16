@@ -1,13 +1,17 @@
+use crate::data_model::{
+    HostName, LogicalSourceName, QueryId, Schema,
+    SinkName, SinkType, SourceType,
+};
+use crate::db_errors::{DatabaseError, ErrorTranslation};
+use crate::errors::CoordinatorError;
 use std::collections::HashMap;
-use crate::data_model::{HostName, LogicalSource, LogicalSourceName, PhysicalSource, Query, QueryId, Schema, Sink, SinkName, SinkType, SourceType, Worker};
-use crate::db_errors::{RequestContext, RequestType};
 
 // Request type aliases
-pub type CreateLogicalSourceRequest = Request<CreateLogicalSource, Result<LogicalSource, String>>;
-pub type CreatePhysicalSourceRequest = Request<CreatePhysicalSource, Result<PhysicalSource, String>>;
-pub type CreateSinkRequest = Request<CreateSink, Result<Sink, String>>;
-pub type CreateWorkerRequest = Request<CreateWorker, Result<Worker, String>>;
-pub type CreateQueryRequest = Request<CreateQuery, Result<Query, String>>;
+pub type CreateLogicalSourceRequest = Request<CreateLogicalSource, Result<(), CoordinatorError>>;
+pub type CreatePhysicalSourceRequest = Request<CreatePhysicalSource, Result<(), CoordinatorError>>;
+pub type CreateSinkRequest = Request<CreateSink, Result<(), CoordinatorError>>;
+pub type CreateWorkerRequest = Request<CreateWorker, Result<(), CoordinatorError>>;
+pub type CreateQueryRequest = Request<CreateQuery, Result<(), CoordinatorError>>;
 
 pub struct Request<Payload, Response> {
     pub payload: Payload,
@@ -57,7 +61,7 @@ pub struct CreateWorker {
     pub host_name: HostName,
     pub grpc_port: u16,
     pub data_port: u16,
-    pub num_slots: Option<u32>,
+    pub num_slots: u32,
 }
 
 pub struct DropWorker {
@@ -74,63 +78,40 @@ pub struct DropQuery {
     pub query_id: String,
 }
 
-// RequestContext implementations
-impl RequestContext for CreateLogicalSource {
-    fn request_type(&self) -> RequestType {
-        RequestType::LogicalSource(self.source_name.clone())
+impl ErrorTranslation for CreateLogicalSource {
+    fn unique_violation(&self, _err: sqlx::Error) -> DatabaseError {
+        DatabaseError::LogicalSourceAlreadyExists {
+            name: self.source_name.clone(),
+        }
     }
 }
 
-impl RequestContext for &CreateLogicalSource {
-    fn request_type(&self) -> RequestType {
-        RequestType::LogicalSource(self.source_name.clone())
+impl ErrorTranslation for CreatePhysicalSource {}
+impl ErrorTranslation for CreateWorker {
+    fn unique_violation(&self, _err: sqlx::Error) -> DatabaseError {
+        DatabaseError::WorkerAlreadyExists {
+            host_name: self.host_name.clone(),
+        }
     }
 }
-
-impl RequestContext for CreatePhysicalSource {
-    fn request_type(&self) -> RequestType {
-        RequestType::PhysicalSource(self.logical_source.clone())
+impl ErrorTranslation for CreateSink {
+    fn unique_violation(&self, _err: sqlx::Error) -> DatabaseError {
+        DatabaseError::SinkAlreadyExists {
+            name: self.name.clone(),
+        }
     }
 }
-
-impl RequestContext for &CreatePhysicalSource {
-    fn request_type(&self) -> RequestType {
-        RequestType::PhysicalSource(self.logical_source.clone())
+impl ErrorTranslation for CreateQuery {
+    fn unique_violation(&self, _err: sqlx::Error) -> DatabaseError {
+        DatabaseError::QueryAlreadyExists {
+            id: self.id.clone(),
+        }
     }
-}
 
-impl RequestContext for CreateSink {
-    fn request_type(&self) -> RequestType {
-        RequestType::Sink(self.name.clone())
-    }
-}
-
-impl RequestContext for &CreateSink {
-    fn request_type(&self) -> RequestType {
-        RequestType::Sink(self.name.clone())
-    }
-}
-
-impl RequestContext for CreateWorker {
-    fn request_type(&self) -> RequestType {
-        RequestType::Worker(self.host_name.clone())
-    }
-}
-
-impl RequestContext for &CreateWorker {
-    fn request_type(&self) -> RequestType {
-        RequestType::Worker(self.host_name.clone())
-    }
-}
-
-impl RequestContext for CreateQuery {
-    fn request_type(&self) -> RequestType {
-        RequestType::Query(self.id.clone())
-    }
-}
-
-impl RequestContext for &CreateQuery {
-    fn request_type(&self) -> RequestType {
-        RequestType::Query(self.id.clone())
+    fn fk_violation(&self, _err: sqlx::Error) -> DatabaseError {
+        DatabaseError::SinkNotFoundForQuery {
+            sink_name: self.sink.clone(),
+            query_id: self.id.clone(),
+        }
     }
 }
