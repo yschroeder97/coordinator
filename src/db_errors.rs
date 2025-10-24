@@ -1,4 +1,4 @@
-use crate::data_model::{tags, HostName, LogicalSourceName, PhysicalSourceId, QueryId, SinkName};
+use crate::data_model::{HostName, LogicalSourceName, QueryId, SinkName};
 use sqlx::Error;
 use sqlx::error::ErrorKind;
 use thiserror::Error;

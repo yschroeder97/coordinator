@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
+use sqlx::{FromRow, Type};
 use std::collections::HashMap;
-use std::fmt::Formatter;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum QueryState {
@@ -10,48 +10,19 @@ pub enum QueryState {
     Failed,
 }
 
-impl std::fmt::Display for QueryState {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            QueryState::Pending => write!(f, "Pending"),
-            QueryState::Running => write!(f, "Running"),
-            QueryState::Completed => write!(f, "Completed"),
-            QueryState::Failed => write!(f, "Failed"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::Type)]
 pub enum SourceType {
     File,
     Tcp,
 }
 
-impl std::fmt::Display for SourceType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SourceType::File => write!(f, "File"),
-            SourceType::Tcp => write!(f, "Tcp"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::Type)]
 pub enum SinkType {
     File,
     Print,
 }
 
-impl std::fmt::Display for SinkType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SinkType::File => write!(f, "File"),
-            SinkType::Print => write!(f, "Print"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
 pub enum DataType {
     UINT8,
     INT8,
@@ -67,66 +38,10 @@ pub enum DataType {
     CHAR,
     VARSIZED,
 }
-impl std::fmt::Display for DataType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DataType::UINT8 => write!(f, "UINT8"),
-            DataType::INT8 => write!(f, "INT8"),
-            DataType::UINT16 => write!(f, "UINT16"),
-            DataType::INT16 => write!(f, "INT16"),
-            DataType::UINT32 => write!(f, "UINT32"),
-            DataType::INT32 => write!(f, "INT32"),
-            DataType::UINT64 => write!(f, "UINT64"),
-            DataType::INT64 => write!(f, "INT64"),
-            DataType::FLOAT32 => write!(f, "FLOAT32"),
-            DataType::FLOAT64 => write!(f, "FLOAT64"),
-            DataType::BOOL => write!(f, "BOOL"),
-            DataType::CHAR => write!(f, "CHAR"),
-            DataType::VARSIZED => write!(f, "VARSIZED"),
-        }
-    }
-}
-
-/// Zero-cost marker traits for encoding table and operation types at compile time.
-/// These are used by the error handling system to provide type-safe context about
-/// which table and operation a database request targets.
-pub mod tags {
-    /// Marker trait for table types
-    pub trait TableTag {}
-
-    /// Marker trait for operation types
-    pub trait OperationTag {}
-
-    // Table type markers
-    pub struct WorkerTable;
-    pub struct LogicalSourceTable;
-    pub struct PhysicalSourceTable;
-    pub struct SinkTable;
-    pub struct QueryTable;
-    pub struct QueryFragmentTable;
-
-    impl TableTag for WorkerTable {}
-    impl TableTag for LogicalSourceTable {}
-    impl TableTag for PhysicalSourceTable {}
-    impl TableTag for SinkTable {}
-    impl TableTag for QueryTable {}
-    impl TableTag for QueryFragmentTable {}
-
-    // Operation type markers
-    pub struct Create;
-    pub struct Drop;
-    pub struct Select;
-    pub struct Update;
-
-    impl OperationTag for Create {}
-    impl OperationTag for Drop {}
-    impl OperationTag for Select {}
-    impl OperationTag for Update {}
-}
 
 pub type FieldName = String;
 pub type AttributeField = (FieldName, DataType);
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
 pub struct Schema {
     fields: Vec<AttributeField>,
 }
@@ -142,7 +57,7 @@ impl Schema {
 }
 
 pub type HostName = String;
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Worker {
     pub host_name: HostName,
     pub grpc_port: u16,
@@ -150,41 +65,45 @@ pub struct Worker {
     pub num_slots: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct NetworkLink {
     pub source_host: HostName,
     pub target_host: HostName,
 }
 
 pub type LogicalSourceName = String;
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct LogicalSource {
     pub name: LogicalSourceName,
+    #[sqlx(json)]
     pub schema: Schema,
 }
 
 pub type PhysicalSourceId = i64;
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PhysicalSource {
     pub id: PhysicalSourceId,
     pub logical_source: LogicalSourceName,
     pub placement: HostName,
     pub source_type: SourceType,
+    #[sqlx(json)]
     pub source_config: HashMap<String, String>,
+    #[sqlx(json)]
     pub parser_config: HashMap<String, String>,
 }
 
 pub type SinkName = String;
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Sink {
     pub name: SinkName,
     pub placement: String,
     pub sink_type: SinkType,
+    #[sqlx(json)]
     pub config: HashMap<String, String>,
 }
 
 pub type QueryId = String;
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Query {
     pub id: QueryId,
     pub statement: String,
@@ -192,7 +111,7 @@ pub struct Query {
     pub sink: SinkName,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct QueryFragment {
     pub query_id: QueryId,
     pub worker_id: HostName,

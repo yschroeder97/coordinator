@@ -1,7 +1,4 @@
-use crate::data_model::{
-    HostName, LogicalSourceName, QueryId, Schema,
-    SinkName, SinkType, SourceType,
-};
+use crate::data_model::{HostName, LogicalSource, LogicalSourceName, PhysicalSource, Query, QueryId, Schema, Sink, SinkName, SinkType, SourceType, Worker};
 use crate::db_errors::{DatabaseError, ErrorTranslation};
 use crate::errors::CoordinatorError;
 use std::collections::HashMap;
@@ -12,6 +9,12 @@ pub type CreatePhysicalSourceRequest = Request<CreatePhysicalSource, Result<(), 
 pub type CreateSinkRequest = Request<CreateSink, Result<(), CoordinatorError>>;
 pub type CreateWorkerRequest = Request<CreateWorker, Result<(), CoordinatorError>>;
 pub type CreateQueryRequest = Request<CreateQuery, Result<(), CoordinatorError>>;
+
+pub type ShowLogicalSourcesRequest = Request<ShowLogicalSources, Result<Vec<LogicalSource>, CoordinatorError>>;
+pub type ShowPhysicalSourcesRequest = Request<ShowPhysicalSources, Result<Vec<PhysicalSource>, CoordinatorError>>;
+pub type ShowSinksRequest = Request<ShowSinks, Result<Vec<Sink>, CoordinatorError>>;
+pub type ShowWorkersRequest = Request<ShowWorkers, Result<Vec<Worker>, CoordinatorError>>;
+pub type ShowQueriesRequest = Request<ShowQueries, Result<Vec<Query>, CoordinatorError>>;
 
 pub struct Request<Payload, Response> {
     pub payload: Payload,
@@ -30,6 +33,14 @@ pub struct CreateLogicalSource {
     pub schema: Schema,
 }
 
+pub struct ShowLogicalSources {
+    pub source_name: Option<LogicalSourceName>,
+}
+
+pub struct DropLogicalSource {
+    pub source_name: LogicalSourceName,
+}
+
 pub struct CreatePhysicalSource {
     pub logical_source: LogicalSourceName,
     pub placement: HostName,
@@ -38,8 +49,10 @@ pub struct CreatePhysicalSource {
     pub parser_config: HashMap<String, String>,
 }
 
-pub struct DropLogicalSource {
-    pub name: LogicalSourceName,
+pub struct ShowPhysicalSources {
+    pub for_logical_source: Option<LogicalSourceName>,
+    pub on_node: Option<HostName>,
+    pub by_type: Option<SourceType>,
 }
 
 pub struct DropPhysicalSource {
@@ -53,6 +66,12 @@ pub struct CreateSink {
     pub config: HashMap<String, String>,
 }
 
+pub struct ShowSinks {
+    pub name: Option<SinkName>,
+    pub on_node: Option<HostName>,
+    pub by_type: Option<SinkType>,
+}
+
 pub struct DropSink {
     pub name: SinkName,
 }
@@ -64,6 +83,10 @@ pub struct CreateWorker {
     pub num_slots: u32,
 }
 
+pub struct ShowWorkers {
+    pub host_name: Option<HostName>,
+}
+
 pub struct DropWorker {
     pub host_name: HostName,
 }
@@ -72,6 +95,11 @@ pub struct CreateQuery {
     pub id: QueryId,
     pub statement: String,
     pub sink: SinkName,
+}
+
+pub struct ShowQueries {
+    pub query_id: Option<QueryId>,
+    pub by_sink: Option<SinkName>,
 }
 
 pub struct DropQuery {

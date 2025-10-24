@@ -5,5 +5,5 @@ mod errors;
 mod requests;
 mod events;
 mod data_model;
-mod db;
+mod catalog;
 mod db_errors;
