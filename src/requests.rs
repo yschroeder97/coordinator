@@ -1,7 +1,11 @@
-use crate::data_model::{HostName, LogicalSource, LogicalSourceName, PhysicalSource, Query, QueryId, Schema, Sink, SinkName, SinkType, SourceType, Worker};
-use crate::db_errors::{DatabaseError, ErrorTranslation};
+pub use crate::data_model::logical_source::{CreateLogicalSource, LogicalSource, ShowLogicalSources};
+pub use crate::data_model::physical_source::{
+    CreatePhysicalSource, PhysicalSource, ShowPhysicalSources,
+};
+pub use crate::data_model::query::{CreateQuery, Query, ShowQueries};
+pub use crate::data_model::sink::{CreateSink, ShowSinks, Sink};
+pub use crate::data_model::worker::{CreateWorker, ShowWorkers, Worker};
 use crate::errors::CoordinatorError;
-use std::collections::HashMap;
 
 // Request type aliases
 pub type CreateLogicalSourceRequest = Request<CreateLogicalSource, Result<(), CoordinatorError>>;
@@ -10,8 +14,10 @@ pub type CreateSinkRequest = Request<CreateSink, Result<(), CoordinatorError>>;
 pub type CreateWorkerRequest = Request<CreateWorker, Result<(), CoordinatorError>>;
 pub type CreateQueryRequest = Request<CreateQuery, Result<(), CoordinatorError>>;
 
-pub type ShowLogicalSourcesRequest = Request<ShowLogicalSources, Result<Vec<LogicalSource>, CoordinatorError>>;
-pub type ShowPhysicalSourcesRequest = Request<ShowPhysicalSources, Result<Vec<PhysicalSource>, CoordinatorError>>;
+pub type ShowLogicalSourcesRequest =
+    Request<ShowLogicalSources, Result<Vec<LogicalSource>, CoordinatorError>>;
+pub type ShowPhysicalSourcesRequest =
+    Request<ShowPhysicalSources, Result<Vec<PhysicalSource>, CoordinatorError>>;
 pub type ShowSinksRequest = Request<ShowSinks, Result<Vec<Sink>, CoordinatorError>>;
 pub type ShowWorkersRequest = Request<ShowWorkers, Result<Vec<Worker>, CoordinatorError>>;
 pub type ShowQueriesRequest = Request<ShowQueries, Result<Vec<Query>, CoordinatorError>>;
@@ -28,118 +34,28 @@ impl<Payload, Response> Request<Payload, Response> {
     }
 }
 
-pub struct CreateLogicalSource {
-    pub source_name: LogicalSourceName,
-    pub schema: Schema,
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DeltaTag {
+    Create,
+    Drop,
+    Show,
 }
 
-pub struct ShowLogicalSources {
-    pub source_name: Option<LogicalSourceName>,
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BaseEntityTag {
+    LogicalSource,
+    PhysicalSource,
+    Sink,
+    Worker,
+    Query,
 }
 
-pub struct DropLogicalSource {
-    pub source_name: LogicalSourceName,
-}
+pub trait RequestHeader<KeyT> {
+    const DELTA: DeltaTag;
+    const ENTITY: BaseEntityTag;
 
-pub struct CreatePhysicalSource {
-    pub logical_source: LogicalSourceName,
-    pub placement: HostName,
-    pub source_type: SourceType,
-    pub source_config: HashMap<String, String>,
-    pub parser_config: HashMap<String, String>,
-}
+    type EntityData: differential_dataflow::Data;
 
-pub struct ShowPhysicalSources {
-    pub for_logical_source: Option<LogicalSourceName>,
-    pub on_node: Option<HostName>,
-    pub by_type: Option<SourceType>,
-}
-
-pub struct DropPhysicalSource {
-    pub physical_source_id: i64,
-}
-
-pub struct CreateSink {
-    pub name: SinkName,
-    pub placement: HostName,
-    pub sink_type: SinkType,
-    pub config: HashMap<String, String>,
-}
-
-pub struct ShowSinks {
-    pub name: Option<SinkName>,
-    pub on_node: Option<HostName>,
-    pub by_type: Option<SinkType>,
-}
-
-pub struct DropSink {
-    pub name: SinkName,
-}
-
-pub struct CreateWorker {
-    pub host_name: HostName,
-    pub grpc_port: u16,
-    pub data_port: u16,
-    pub num_slots: u32,
-}
-
-pub struct ShowWorkers {
-    pub host_name: Option<HostName>,
-}
-
-pub struct DropWorker {
-    pub host_name: HostName,
-}
-
-pub struct CreateQuery {
-    pub id: QueryId,
-    pub statement: String,
-    pub sink: SinkName,
-}
-
-pub struct ShowQueries {
-    pub query_id: Option<QueryId>,
-    pub by_sink: Option<SinkName>,
-}
-
-pub struct DropQuery {
-    pub query_id: String,
-}
-
-impl ErrorTranslation for CreateLogicalSource {
-    fn unique_violation(&self, _err: sqlx::Error) -> DatabaseError {
-        DatabaseError::LogicalSourceAlreadyExists {
-            name: self.source_name.clone(),
-        }
-    }
-}
-
-impl ErrorTranslation for CreatePhysicalSource {}
-impl ErrorTranslation for CreateWorker {
-    fn unique_violation(&self, _err: sqlx::Error) -> DatabaseError {
-        DatabaseError::WorkerAlreadyExists {
-            host_name: self.host_name.clone(),
-        }
-    }
-}
-impl ErrorTranslation for CreateSink {
-    fn unique_violation(&self, _err: sqlx::Error) -> DatabaseError {
-        DatabaseError::SinkAlreadyExists {
-            name: self.name.clone(),
-        }
-    }
-}
-impl ErrorTranslation for CreateQuery {
-    fn unique_violation(&self, _err: sqlx::Error) -> DatabaseError {
-        DatabaseError::QueryAlreadyExists {
-            id: self.id.clone(),
-        }
-    }
-
-    fn fk_violation(&self, _err: sqlx::Error) -> DatabaseError {
-        DatabaseError::SinkNotFoundForQuery {
-            sink_name: self.sink.clone(),
-            query_id: self.id.clone(),
-        }
-    }
+    fn to_entity_data(&self) -> Self::EntityData;
+    fn key(&self) -> KeyT;
 }

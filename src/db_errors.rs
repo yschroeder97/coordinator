@@ -1,4 +1,7 @@
-use crate::data_model::{HostName, LogicalSourceName, QueryId, SinkName};
+use crate::data_model::worker::HostName;
+use crate::data_model::logical_source::LogicalSourceName;
+use crate::data_model::query::QueryId;
+use crate::data_model::sink::SinkName;
 use sqlx::Error;
 use sqlx::error::ErrorKind;
 use thiserror::Error;

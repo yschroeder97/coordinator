@@ -1,10 +1,12 @@
-use crate::data_model::{
-    LogicalSource, PhysicalSource, Query, QueryState, Schema, Sink, SinkType, SourceType, Worker,
-};
 use crate::db_errors::DatabaseError;
-use crate::requests::{CreateLogicalSource, CreatePhysicalSource, CreateQuery, CreateSink, CreateWorker, ShowLogicalSources, ShowPhysicalSources};
 use sqlx::{Executor, Row, SqlitePool};
 use std::env;
+use crate::data_model::logical_source::LogicalSource;
+use crate::data_model::physical_source::{CreatePhysicalSource, PhysicalSource, ShowPhysicalSources};
+use crate::data_model::query::{CreateQuery, Query, QueryState};
+use crate::data_model::sink::{CreateSink, Sink, SinkType};
+use crate::data_model::worker::{CreateWorker, Worker};
+use crate::requests::{CreateLogicalSource, ShowLogicalSources};
 
 #[derive(Clone)]
 pub struct Catalog {
@@ -267,8 +269,9 @@ impl Catalog {
 
 #[cfg(test)]
 mod db_tests {
+    use crate::data_model::physical_source::{CreatePhysicalSource, SourceType};
+    use crate::data_model::schema::{DataType, Schema};
     use super::*;
-    use crate::data_model::{DataType, Schema, SourceType};
     use crate::db_errors::DatabaseError;
     use crate::requests::CreateLogicalSource;
 

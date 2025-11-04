@@ -7,3 +7,5 @@ mod events;
 mod data_model;
 mod catalog;
 mod db_errors;
+mod views;
+mod cluster;

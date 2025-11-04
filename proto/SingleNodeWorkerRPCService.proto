@@ -1,0 +1,81 @@
+syntax = "proto3";
+package worker_rpc;
+import "google/protobuf/empty.proto";
+
+service WorkerRPCService {
+  rpc RegisterQuery (RegisterQueryRequest) returns (RegisterQueryReply) {}
+  rpc UnregisterQuery (UnregisterQueryRequest) returns (google.protobuf.Empty) {}
+
+  rpc StartQuery (StartQueryRequest) returns (google.protobuf.Empty) {}
+  rpc StopQuery (StopQueryRequest) returns (google.protobuf.Empty) {}
+
+  rpc RequestQuerySummary (QuerySummaryRequest) returns (QuerySummaryReply) {}
+  rpc RequestQueryLog (QueryLogRequest) returns (QueryLogReply) {}
+}
+
+message RegisterQueryRequest {
+}
+
+message RegisterQueryReply {
+  uint64 queryId = 1;
+}
+
+message UnregisterQueryRequest {
+  uint64 queryId = 1;
+}
+
+message StartQueryRequest {
+  uint64 queryId = 1;
+}
+
+message StopQueryRequest {
+    enum QueryTerminationType {Graceful = 0; HardStop = 1; Failure = 2; Invalid = 3;};
+    uint64 queryId = 2;
+    QueryTerminationType terminationType = 3;
+}
+
+enum QueryStatus {
+    Registered = 0;
+    Started = 1;
+    Running = 2;
+    Stopped = 3;
+    Failed = 4;
+}
+
+message Error {
+    uint64 code = 1;
+    string message = 2;
+    string stackTrace = 3; /// currently untyped
+    string location = 4; /// currently untyped
+}
+
+message QuerySummaryRequest {
+  uint64 queryId = 1;
+}
+
+message QueryRunSummary {
+   uint64 startUnixTimeInMs = 1;
+   uint64 runningUnixTimeInMs = 2;
+   uint64 stopUnixTimeInMs = 3;
+   optional Error error = 4;
+}
+
+message QuerySummaryReply {
+    uint64 queryId = 1;
+    QueryStatus status = 2;
+    repeated QueryRunSummary runs = 3;
+}
+
+message QueryLogRequest {
+    uint64 queryId = 1;
+}
+
+message QueryLogEntry {
+    QueryStatus status = 1;
+    uint64 unixTimeInMs = 2;
+    optional Error error = 3;
+}
+
+message QueryLogReply {
+    repeated QueryLogEntry entries = 1;
+}

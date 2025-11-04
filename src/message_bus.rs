@@ -116,7 +116,8 @@ pub fn coordinator_message_bus(
 #[cfg(test)]
 mod message_bus_test {
     use crate::coordinator::{CoordinatorEvent, CoordinatorRequest};
-    use crate::data_model::{DataType, LogicalSource, Schema};
+    use crate::data_model::schema::{DataType, Schema};
+    use crate::data_model::logical_source::LogicalSource;
     use crate::events::Heartbeat;
     use crate::message_bus::coordinator_message_bus;
     use crate::messages::Message;
