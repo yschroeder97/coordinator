@@ -1,11 +1,6 @@
-mod coordinator;
+pub mod cluster;
+pub mod coordinator;
+pub mod data_model;
+pub mod errors;
 mod message_bus;
-mod messages;
-mod errors;
 mod requests;
-mod events;
-mod data_model;
-mod catalog;
-mod db_errors;
-mod views;
-mod cluster;

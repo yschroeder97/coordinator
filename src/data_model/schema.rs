@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
+use strum::EnumIter;
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[derive(PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Copy, Debug, Clone, Serialize, Deserialize, EnumIter)]
 pub enum DataType {
     UINT8,
     INT8,
@@ -20,14 +20,13 @@ pub enum DataType {
 
 pub type FieldName = String;
 pub type AttributeField = (FieldName, DataType);
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[derive(PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Schema {
     fields: Vec<AttributeField>,
 }
 
 impl Schema {
-    pub fn with(fields: Vec<AttributeField>) -> Schema {
+    pub fn from(fields: Vec<AttributeField>) -> Schema {
         assert!(
             !fields.is_empty(),
             "Cannot construct Schema with empty fields"

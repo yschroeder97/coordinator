@@ -1,347 +1,471 @@
-Reintroduce a stateful, continuously running coordinator back into NES.
-This proposal describes a two-phase periodic, snapshot-based approach that packages the duties of managing an NES deployment into a single library.
-Some ideas are derived from the legacy coordinator, where @ankitgit invested a significant amount of time, incorporating my ideas for improvements and engaging in discussions.
+# Coordinator
 
-# 1. Status Quo
+## Role and Responsibilities
+
+- Cluster Membership
+    - Maintain gRPC connections to workers
+    - Detect unreachable workers
+    - Reconnect to unreachable/failed workers
+    - Update topology on membership changes
+- Catalog
+    - Sources
+    - Sinks
+    - Queries
+    - Workers
+-
+
+## Status Quo
 At the moment of writing, the system is accessible via three entry points:
-1. The **systest tool**. Used for testing, it loads a set of test files, parses its custom DSL, and submits a set of queries to an embedded/remote NES worker. It maintains its own logic of binding, tracking progress/status, and checking the results of queries.
-2. **NebulI/YAML**. Oneshot binary target that takes a stateless approach.
-   It takes command line arguments involving query requests (register/start/stop/unregister) and either a YAML configuration (register) or a query ID (start/stop/unregister), matching the interface of the current `GrpcQueryManager`.
-   It only supports an API related to queries, with descriptions of sources/sinks being contained in the register request of a query. The approach taken here shifts the responsibility for managing the query's progress to the user.
-4. **Statement API/REPL**. Introduces SQL-like statements, including creating/showing/dropping queries/sources/sinks. Implements very basic query tracking functionality.
+1. The **system-level test (SLT)** tool. Used for end-to-end testing, it loads a set of test files, parses them, and submits a set of queries to an embedded/remote NES worker. It maintains its own logic for binding, tracking progress/status, and checking query results.
+2. **Nebuli/YAML**. Oneshot binary target that takes a stateless approach.
+   Takes command line arguments with query manipulation requests (register/start/stop/unregister/status) and either a YAML configuration (register) or a query id (start/stop/unregister), matching the interface of the current GrpcQueryManager.
+   It only supports an API for queries, with source/sink descriptions contained in the query register request. The approach taken here shifts the responsibility for managing the query's progress to the user.
+3. **Statement API/REPL**. Introduces SQL-like statements, including creating/showing/dropping queries/sources/sinks. Implements basic query tracking functionality.
+   Currently, workers' capacities are reset after each query, rather than operators truly consuming capacity and returning it when the query terminates.
 
-The general deployment process can be summarized as follows:
-- One or more (distributed) SingleNodeWorkers that run in standalone processes OR embedded in one of the frontends.
-- One or more frontends (Nebuli/REPL/systest).
-- No infrastructure changes allowed, only query changes.
+## Problems
+1. Writing a new frontend requires pulling in components such as the parser, binder, planner, and query manager.
+   Furthermore, the frontend needs to invoke these components directly, duplicating logic or using them in slightly different ways
+   This is error-prone and does not scale well when adding new frontends (e.g., language clients, REST APIs), because changes propagate to multiple parts of the codebase. Frontends are currently allowed to do whatever they want to plan and track queries, rather than adhering to a single interface.
+2. NES runs continuous (i.e., long-running) queries over unbounded data.
+   Without maintaining state, we have a hard time managing the deployment and its entities over a prolonged period.
+   We can't meaningfully collect heartbeats and statistics from workers to keep the cluster together, track worker capacities when allocating workloads, or trigger reoptimization of running queries. Therefore, maintaining the state is a prerequisite for all of these follow-up tasks.
+3. Our data model is not clearly defined and does not account for the relational nature of some entities.
+   For example, deleting a source does not affect the queries that use it.
+   In its current state, it would be unclear how introducing a persistent state in the coordinator would work.
 
-# 2. Problems
-1. Frontends are **tightly intertwined with other tasks** like binding, planning, submitting, and tracking the state of queries.
-   These components are used in slightly different ways, scattered around the mentioned binary targets in NES.
-   This is error-prone and makes maintaining the system harder, because **changes propagate** to different locations in the codebase.
-2. We have no designated approach for **concurrently managing events that reach the system**.
-   In the current state of the different frontends, this might not be a problem.
-   Still, as soon as requests are received from multiple threads or internal messages are interleaved with external ones, we need a more thoughtful approach to concurrency.
-   Neither letting frontend threads carelessly invoke the other query planning components nor slapping locks into every shared resource is a good approach.
-3. NES runs continuous queries over unbounded data. Without maintaining state, we have a hard time managing the deployment and all its entities over a prolonged period of time.
-   We can not meaningfully collect heartbeats and statistics from workers to keep the cluster together, keep track of worker capacities when allocating workloads to them, or trigger reoptimization of running queries. Therefore, **maintaining state is a prerequisite** for all of these follow-up tasks.
-4. Our data model is not defined clearly, and does not take the relational nature of some of the entities into account. We have catalogs that do not encode these relations, nor do they currently support cascading deletes. In the current state, it would be unclear how introducing a persistent state in the coordinator could work.
+## Scope
 
-# 3. Goals
-1. **Separation of Concerns**: afterwards, none of the frontends should need to implement any logic regarding parsing the query string, binding, interacting directly with the catalogs, interacting with the worker, tracking status and progress of queries, etc.
-   They simply formulate requests and forward them to the coordinator (addresses P1).
-   Implementing new frontends should be way easier after this change.
-   Similarly, the design of the coordinator should not restrict the degrees of freedom in the optimizer/placer in any way.
-3. **Thread-safety**: frontends should not need to care about this and be allowed to invoke the coordinator from multiple threads safely.
-   At the same time, the design should be open for extension to a diverse set of parallelization strategies in the optimizer (addresses P2).
-5. **Robustness**: failures due to processing internal/external messages should not influence other messages and never lead to a crash of the entire coordinator.
-   Furthermore, an overload should be handled gracefully by applying backpressure to the frontends and the workers.
-   Due to the coordinator being a single point of failure, we need a robust design that prevents congestion within the coordinator.
-7. **Extensibility**: even if we do not implement this right away, the design should allow for adding new (types of) messages to the coordinator and enhanced monitoring capabilities. This will facilitate research on the coordinator.
-8. **Simplicity**: the coordinator should be easy to configure, with relatively few parameters
-9. **Flexibility**: the coordinator should be usable from the network and within the same process, from both asynchronous runtimes and "normal" threads, to not pose any restrictions on the execution context from which it is invoked.
+To quickly move from a PoC to a running coordinator, we limit the scope in the following ways:
+- We start with a single centralized coordinator. Reasons for this are outlined in #1120. As a result, requests can be sent only to the coordinator, and decisions affecting other workers can't be made locally.
+- The coordinator will initially not expose a network interface. As a result, the coordinator needs to be embedded into the frontends as a library.
+- To leverage the existing gRPC machinery, all coordinator-worker communication will be pull-based, initiated by the coordinator via RPC. Switching to a push-based model for certain events may be beneficial in some cases (cluster membership, statistics), but it is out of scope for this initial PoC.
+- Performance will not be a consideration initially. Once we have a clear picture of the kind of load we expect, we can optimize for that. We focus on reliability, correctness, and simplicity first, then tackle performance issues.
+- In the NES vision, we aim to cope with both infrastructure and workload changes. Currently, only dynamic workloads are supported, so we will maintain this setup and implement dynamic cluster membership down the line.
+- Query reconfiguration will not be considered because key requirements, such as state migration, statistics, or reoptimization, are not yet present in the system. As a result, fault tolerance for queries can only be achieved by restarting a query fragment or the whole query.
 
-# 4. Non-Goals
-1. The coordinator will not (initially) support an extensive set of messages, but an absolute minimum.
-2. Implement any logic related to query parsing, binding, optimization, or placement.
-   It only provides the respective components with a consistent snapshot of the entities within the NES deployment to work with.
-4. This initial proposal, as well as the initial PoC implementation, will not target fault tolerance, persistence, or periodic reoptimization.
-   We only lay out the foundation for these things to be implemented on top of.
+## Assumptions
 
-# 5. Core Design Choices
+NES is a distributed system with two types of executables:
+- A single coordinator process
+- n worker processes
+  Those are arbitrarily placed on a set of nodes and can communicate via the network, with the following restrictions:
+- The coordinator can talk to all workers via RPC (although this may not be true in real-world scenarios).
+- The coordinator initiates all communication to workers, not the other way around.
+- Workers can communicate as specified in a static topology definition (currently, a directed acyclic graph).
+- Communication between workers is initiated from the source node of a directed edge (worker1 --> worker2).
 
-This chapter outlines the core design decisions that the coordinator should implement, together with alternatives and arguments for why I would neglect them.
+We further assume the following properties hold in the system:
+### Nodes
+We assume a crash-recovery model of node behavior, meaning that worker processes or the entire node can crash at any time, though they may resume later.
 
-## 5.1 Centralized Coordinator
-This has been a frequent point of discussion, and there is no best answer.
-The overarching benefit of a centralized coordinator is that it enables achieving correctness and consistency in a reasonably simple implementation in a reasonable amount of time.
-It provides a global view of the deployment state, freeing us from worrying about distributed consistency and consensus protocols.
-This enables quick decisions without consulting other participants within the deployment.
-As the main disadvantages of this design, these two are brought up the most:
-1. **Single point of failure**: if the coordinator crashes, and if the other participants do not have autonomy, we can not proceed reliably, and the whole deployment falls apart.
-2. **Limited scalability**: if the coordinator is limited to a single instance, we are constrained by the resources on the machine on which it runs.
-   At some level of incoming traffic, it will fail to process more requests.
+### Network
+We assume that communication between the coordinator <=> workers and between workers is reliable (messages delivered exactly once and not out of order).
+Using a reliable transport protocol, such as TCP, within RPCs achieves this.
+This does not mean that we can assume end-to-end exactly-once, in-order delivery within our application.
+Different incarnations of the same connection after a crash may duplicate messages, as the networking stack does not know application semantics.
 
-Regarding 1), a coordinator would be deployed on a cloud node or a node local to the user, thereby guaranteeing a certain level of reliability.
-The most frequently occurring problem is that the process crashes, which can be mitigated by introducing persistence for the catalogs' state (e.g., via an embedded relational database).
-If an even stronger safety net is required, we could use a replicated/distributed database.
-For 2), a similar argument applies: a cloud node will likely be able to handle a reasonable amount of traffic that will be enough for 99% use cases, especially for real-world use cases in the coming years.
-Remember that we target long-running queries instead of ad-hoc queries, which amortizes deployment over a larger time interval.
-For research, contributors are free to implement their own, more exotic coordination mechanisms.
-We can at least mitigate the problems of limited scalability by applying backpressure gracefully by blocking threads or via the network protocol in case of an overloaded coordinator.
-That way, it can continue reliably.
-We leave the coordinator open for extension as much as possible by decoupling the different architectural components.
+### Timing
+We assume a partially synchronous timing/synchrony model, meaning:
+- Nodes may pause execution (e.g., the machine is busy and other threads are scheduled to run)...
+- Messages may be delayed (e.g., due to network congestion)...
+  ...arbitrarily, for a finite, but unknown amount of time.
 
-### Alternative 1: distributed coordinator
+### Expected Workloads
+NES runs continuous queries over unbounded data.
+This means:
+- The system as a whole may run for a long time.
+- Queries may run for a long time.
+  Additional load parameters depend on what we expect to happen in real-world scenarios and on what we want to optimize. For example:
+- What do we expect to change more frequently? Workloads, data, or infrastructure?
+    - If data characteristics change rapidly, we should trigger reoptimization often.
+    - If workloads change often, we should optimize for response time.
+    - If infrastructure changes often, we should have dynamic membership and state/query migration.
+- Do we expect more ad-hoc queries that come and go, or long-running queries?
+- Do we expect queries to be submitted in a single batch or continuously over time?
+- Are the requests to the coordinator read-heavy (querying or displaying parts of its state) or write-heavy (creating/dropping entities)?
+- How large do we expect the different entities to be? (e.g., thousands of queries, millions of sources)
+  For these reasons, performance is initially out of scope, as we do not yet have a clear picture of the load characteristics or the workloads NES should be optimized for.
 
-A future improvement on the centralized approach.
-Coordinator instances that serve a specific region of the deployment could be placed at suitable points in the network topology, with a router/load balancer in front that sends the appropriate messages to them.
-Not suitable as a baseline because the centralized coordinator is a prerequisite for this.
+### Requirements
 
-### Alternative 2: decentralized/no coordinator
-Proposes large/full autonomy of the worker nodes.
-A large variety and number of approaches are thinkable, but an initial approach that could serve as a baseline is unclear.
-Does not pose the problems of the centralized approach (no single point of failure, has infinite scalability).
-However, implementing this in the current state of the system is too complex and poses a high risk in terms of implementing it robustly and correctly within a reasonable timeframe.
-This does not mean that it is a bad idea to shift to a more decentralized approach with shared responsibilities gradually.
-Instead, it can evolve naturally from the initial centralized approach.
+The requirements are ordered by importance (functionality, reliability, flexibility, performance).
+1. Functionality: implement a basic MVP that correctly processes a set of user-friendly, easy-to-understand requests. At this point, the coordinator does not take the initiative to trigger reoptimization, etc.
+2. Fault Tolerance: the system as a whole continues to function and makes progress even in the presence of faults. We should gracefully handle increased load by applying backpressure to the frontends if required. At this point, the coordinator detects and responds to faults rather than failing requests at the first sight of a problem.
+3. Flexibility: implement networking facilities so the coordinator can be deployed independently within the cluster and, for example, be embedded on worker nodes. This serves as a prerequisite for it to be shared by different frontends and clients.
+4. Performance: implement mechanisms for deduplication, compaction, batching, merging, parallel RPCs, etc.
 
-**For the reasons outlined, I propose implementing a centralized, single-node coordinator that could be extended to be distributed and use persistence via an embedded database.**
+## Data Model
 
-## 5.2 Packaging/Deployment
+The data model of the coordinator revolves around maintaining the key metadata entities
+- Workers
+    - Network links to their peers
+- Queries
+    - Sources
+    - Sinks
+    - Operators
+      ...and the derived representations we obtain from them.
 
-I imagine two options for packaging the coordinator.
-1. As a **library** intended to be used within one of the frontends (e.g., the systest tool or the REPL).
-2. As a standalone **binary**, it enables serving multiple frontends at once.
+At a high level, the coordinator's job is to maintain a network of interconnected views, known at startup, and incrementally updated as messages flow into the system.
+Those changes may either originate from external clients as requests:
+- UI
+- REST server
+- Systests
+- REPL
+- Language clients
 
-The coordinator will link against all the current NebulI query planning components (global optimizer, catalogs, parser).
-This enables the frontends to link against the coordinator, simplifying their build.
-I suggest starting with the library implementation for use within either of the frontends, but with the future extension to a binary in mind.
+Or from internal components, such as workers, as events:
+- Statistics from workers about throughput, network round-trip time to peers, and task queue backlog size.
+- Heartbeat messages
 
-## 5.3 Interface
+| Message Source | Requires Response | Requires Reliable Transmission | Frequency                  | Volume      | Example                                    |
+|----------------|-------------------|--------------------------------|----------------------------|-------------|--------------------------------------------|
+| External       | Yes               | Yes                            | fluctuating, unpredictable | low/medium  | Client requests (CreateQuery, DropSource)  |
+| Internal       | Mostly not        | Mostly not                     | constant, predictable      | medium/high | Statistics, Heartbeats                     |
 
-With goals 1) and 2) in mind, I propose an entirely **message-based interface** to the coordinator.
-A message-driven system enables **loose coupling** between the coordinator and its clients, and helps the implementation stay open for extension by adding more messages (types).
-Moreover, it lends itself well to networking, where messages are exchanged to communicate.
-On a conceptual level, a message indicates that either **something happened** or something **is requested to happen**.
-To build upon this differentiation, we support two types of messages:
-- An **event**, which designates that something happened within or outside the system. Events are sent in a **fire-and-forget** fashion, meaning the sender is not interested in knowing the outcome or side effects that the event caused, nor is the sender interested in the result.
-  An example of an event may be a `StatisticEvent` or a `HeartbeatMessage`.
-  The worker does not need to know what the coordinator does with the statistics or heartbeats.
-  With respect to program flow, an event is always **asynchronous** and **non-blocking** from the perspective of the sender (although this is not 100% accurate in the presence of backpressure).
-- A **request** is used in a request-response pattern.
-  This indicates that the sender expects a result back.
-  Examples of this may be `StartQuery` or `DropSource`.
-  The user at least wants to know whether the desired effect of the message occurred (was the query actually started?), so it requires a result back from the coordinator.
-  From the sender's perspective, a request can be either **synchronous**, **asynchronous**, **blocking**, or **non-blocking**.  
-  What it will be in practice depends on the sender's preferences and its execution context.
-  If the sender is located on the same node as the coordinator and runs in an async runtime, it has different requirements than a sender running on a different machine, using RPC to block on the response.
+We start with a fresh state and incrementally update it as requests and events flow into the system.
 
-I expect events to be used primarily for internal communication in the direction worker --> coordinator, while the frontend --> coordinator communication might primarily use requests.
-With that in mind, the decision also depends on whether the worker-coordinator-communication is pull- or push-based.
-Hence, the coordinator should implement both.
+These dataflows maintain different higher-level views (derived representations) that are continuously updated via incoming events and requests.
 
-From the top of my head, I can think of the following messages currently:
-- Events:
-    - `HealthUpdateEvent`/`HeartbeatEvent`, periodic small ping `StatisticEvent`, e.g., how many operators are currently running, current throughput
-    - `RegisterWorkerEvent` the worker with the coordinator in the beginning, which may include information like the worker's capabilities in terms of CPU cores, cache sizes, etc.
-- Requests:
-    - `CreateLogicalSource`, `DropLogicalSource`, `GetLogicalSource`
-    - `CreatePhysicalSource`, `DropPhysicalSource`, `GetPhysicalSource`
-    - `CreateSink`, `DropSink`, `GetSink`
-    - `CreateQuery`, `DropQuery`, `GetQuery`, `StartQuery`, `StopQuery`
+Pushing data into the base entities, arranging them by primary keys and secondary indexes, advancing time in lock step.
+Me might have derived requests that are pushed into the dataflow during computation.
+Implementing feedback/reconciliation loop
 
-We can further differentiate into internal and external messages, where internal ones originate from within the system, while external messages originate from the user or an external system.
-The differentiation could be encoded into the implementation by using different ports/queues to receive them, handling them in different runtimes or with other priorities, i.e., internal first.
 
-The API of the messaging interface should be as flexible as possible with respect to the **execution context** from which it is invoked.
-The following requirements are of importance:
-- Should be usable from normal threads and asynchronous runtimes.
-  For example, the gRPC client that collects remote messages might run in an
-  async runtime.
-  In this case, the thread calling the send/ask API should never be blocked for an extended period of time.
-  On the other hand, the REPL might be sending events from threads.
-- Should hide whether the coordinator actually runs within the process where the send happens.
-  If the coordinator is hosted on a remote machine, transparently forward the message via a network interface.
-- Should be able to send all types of messages that adhere to a common interface, leaving room for future additions.
+### Should we use persistence and/or an external data storage system?
+Advantages:
+- Durability of the core coordinator state is a prerequisite for fault tolerance, which is a prerequisite for using NebulaStream in production at some point.
+    - When the coordinator or node crashes, it can recover from the durable state. Workers do not have all the information needed to restore a consistent metadata snapshot, and they might also be down at the coordinator restart.
+- Using an external system provides querying capabilities and consistency guarantees, relieving us of the need to implement these ourselves.
+- We can model invariants and constraints directly in the data model rather than in application logic.
+    - Uniqueness issues (creating a source that already exists)
+    - Foreign key violations (creating a query fragment and placing it on a worker that does not exist)
+      Disadvantages:
+- Complexity and dependency management.
+- Locking us into a specific data model and even a particular system reduces flexibility.
+- We cannot model all our invariants or all our views on the metadata using only the query language provided by the external system. This can lead to an awkward mix of system-specific client code and application (coordinator) code.
+  Proposal:
+  Add durability in stage 2 (fault tolerance), as it is not required for an initial MVP.
+  Use a storage system for metadata durability in the coordinator, but prefer embeddable solutions (in-process, such as RocksDB or SQLite) that do not require maintaining a second or third system beyond our own.
 
-All event-typed messages should be sendable using the following variants:
-1. `async fn send(event) -> Future<Result<(), SendError>>`: send event to coordinator from an async context. When the send would normally block, it returns a future that is resumed once ready to send.
-2. `fn send_blocking(event) -> Result<(), SendError>`: send event to coordinator within the same processing from a normal threaded context.
-3. Other extensions are possible, like `send_many` , `send_timeout` , or `try_send`
+### Relational Model
+**Advantages**:
+- Metadata entities are interrelated, meaning joins do not need to be implemented in application logic:
+    - Sinks are placed on a worker
+    - Query fragments (local queries, created by QueryDecomposer ) refer to the query they are part of and the worker they are currently assigned to
+    - Physical sources are placed on a worker and refer to a logical source
+    - Queries have at least one physical source, exactly one sink, and are composed of at least one fragment
+    - Network links connect two nodes
+- Support of transactions, checks, constraints, triggers, stored procedures, materialized views, etc.
 
-The send call does not wait for a response, allowing the sending thread to continue.
-When the message bus reaches its batch size (explained in the next section), but the consumer is not finished processing, senders are blocked, either by awaiting the future or sleeping (addresses G5).
-The backpressure propagates to remote sends via the network protocol.
+**Disadvantages**:
+- We need awkward ORM mapping between database objects and the coordinator's own in-memory representation.
+- We can't express all computations in terms of database queries; we'll likely have derived collections in memory (like the topology and query graph), which means the in-memory representations and the database must be kept in sync and up to date at all times, requiring the mapping layer mentioned above.
+- More complex maintenance and configuration (compared to a key-value store).
 
-All request-typed messages should be sendable using the following API:
-1. `async fn ask(request) -> Future<Result<Response, AskError>>`: similarly, asking from an async context, the `Response` can be awaited via the returned future.
-2. `fn ask(request) -> Result<Response, AskError>`: ask from threaded context, blocks (bringing the thread to sleep) until the response is ready.
-   We might implement requests using RPC for inter-node communication.
+### Key-Value Model
+**Advantages**:
+- Simple, easy to reason about.
+- Often: high write throughput.
+- Easily applicable to our use case, all entities have (named) ids that are suitable as keys.
+- We can use the event-sourcing model, where we store client commands/requests rather than the actual data. This allows us to store each entity and its derived representations in our preferred format in memory while providing durability when combined with checkpointing consistent snapshots from time to time.
+    - This can later be extended nicely to use the Raft consensus algorithm, making the coordinator more robust and increasing availability.
 
-## Architecture
-<img width="1869" height="986" alt="coordinator_architecture(1)" src="https://github.com/user-attachments/assets/0fe92227-4eb2-4655-9aa3-817a73e5c16a" />
+**Disadvantages**:
+- Does not support complex queries involving joins/aggregations.
+- Does not have the expressive constraint checking, triggers, or materialized views that relational engines have.
+- Limited support for transactions.
 
-The architecture I envision divides the coordinator into three layers:
-1. Messaging Layer
-2. Service Layer
-3. Data Layer
+### Graph Model
+**Advantages**:
+- Topologies and query plans are both a good fit.
+    -  Advanced querying capabilities like traversing, finding paths, etc.
+- Our metadata could be modeled as a single, large graph of the topology, with queries/operators placed on it (a graph within a graph).
 
-The **messaging layer** is responsible for gathering, dispatching, and storing messages that the coordinator receives and sends.
-As described in the previous chapter, it supports transparent invocation from different execution contexts and from local as well as remote clients.
-This flexibility allows us to receive data from multiple frontends and workers that may either reside within the current process or on a remote machine.
-The transparency achieved through the messaging model will be beneficial when we want to transition to a more decentralized approach.
-In this case, multiple coordinators that are responsible for a unique partition of the deployment can communicate with each other.
-Similarly, in a setup with more autonomous workers, we can embed the coordinator library into the `SingleNodeWorker` and have it communicate with the local worker as well as remote embedded coordinators that are located upstream/downstream in the topology.
-In the depicted figure, the REST server and Worker-1 are located on remote hosts while Worker-2 and the REPL/SLT tool run within the local process.
-Furthermore, Worker-2 may want to respond to query requests from an asynchronous runtime where its RPC server runs, but the REPL wants to block on the response.
-The messaging layer can be extended with preprocessing functionality (as shown in the diagram) for demultiplexing into topics (such as sources, sinks, queries, infrastructure, statistics, etc.) and compacting messages.
-Finally, the changelog contains all changes that should be applied as part of the creation of the following snapshot.
+**Disadvantages**:
 
-The **service layer** processes the collected messages.
-It controls the different entities of the deployment (sources, sinks, statistics, queries, workers) and applies all updates to the underlying data model.
-In the service layer, we have data dependencies and therefore process messages in stages:
-1. Infrastructure-related messages are processed first (they potentially influence queries, sources, sinks)
-2. Source/Sink-related messages are processed second (they potentially influence queries)
-3. Query-related messages are processed last (the snapshot includes up-to-date information on the other entities)
 
-It might be possible and desirable that groups of related messages are processed together, and that stages emit new messages for downstream stages to include.
-Therefore, the design of the changelog should facilitate this.
-Within a single stage, there may be parallelization potential.
+**Proposal**:
+We should avoid distributing data across multiple models managed by separate systems.
+Each new external system brings an additional layer of maintenance and configuration, increasing complexity.
+Furthermore, we build large blocks of client code to handle communication with these systems, locking us in.
 
-The **data layer** maintains the actual state of the coordinator.
-We should decide on a single coherent data model that allows us to use a persistent database to store (parts of) a snapshot.
-Current catalogs do not take into account that entities are related to each other, that deletes cascade, and that we may want to do more than point queries.
-I am unsure what data models might be good fits to model the different entities we have, and if we could have a unified interface to query/update the metadata.
-Finally, I am unsure how tightly/loosely coupled the processing stages and the data model should be.
+- Should we return the create query request with a pending state, forcing the client to check the query status?
+- Where do we implement schema, descriptors, etc?
 
-## Program Flow
-As I currently envision it, the coordinator conceptually runs an endless loop of **message gathering & message processing** passes, where processing is based on a snapshot of the system created by the previous pass.
-- Message gathering collects messages, potentially from multiple threads and/or from over the network
-- Message processing takes ownership of the gathered batch of messages and proceeds to create a new snapshot of the system
+## User-facing Messages
 
-<img width="1342" height="540" alt="flow_coordinator drawio" src="https://github.com/user-attachments/assets/95d3250a-4c65-4278-aad4-d55909130b82" />
+### Should we allow clients (frontends, users) to query our metadata arbitrarily?
+Database systems sometimes allow querying internal metadata, such as tables, views, and indexes.
+We could also expose our metadata via SQL or our query dialect.
 
-Both happen concurrently, synchronized by a thread-safe message bus abstraction.
-It controls when a pass ends and a new one begins through two parameters: `batch_size` and `timeout`.
-These two are upper bounds, the first one that triggers ends the current pass.
-Note that there may be infinitely many senders, but only one receiver that claims the accumulated batch.
-This does not mean that no parallelism is involved when processing the batch; instead, it means that a single receiver thread initially receives it.
-The outlined idea combines two key mechanisms: **decoupling senders & receivers** with an n-to-1 mapping, and **timed batching**.
-There are several advantages to this approach:
-1. **Simplicity** from the perspective of the callers: senders are continuously pushing data into the coordinator without knowing about any barriers/snapshots.
-   Senders do not know or care about the processing of their event/request.
-   The receiver similarly runs in a loop, claiming a batch, processing it, and blocking until the next batch is ready.
-   Addresses P1/G1.
-5. **Unified approach for flow control**: Using the timed batch approach described, we can easily prevent overloading of the coordinator by blocking senders if the receiver has not finished processing.
-   Blocking propagates the information that the coordinator is overloaded to the frontend or workers, even if they reside on another physical machine (over TCP/RPC). Addresses P2/G2.
-6. **Trade-off throughput/latency**: By customizing the two key parameters, timeout and batch_size of the message bus, the deployment's throughput/latency characteristics can be configured.
-   Under tighter latency constraints, lower the timeout. For maximum throughput, increase the batch size.
-7. **Maximum flexibility for parallelism** in the query planner: since a single receiver receives the batch initially, it can spawn threads to parallelize work however it sees fit.
-   For example, we could do logical optimization of the different queries in the batch in parallel. I think various strategies can be explored here, but to avoid premature optimization and allow for quick prototyping, it's best to start with a simple, single-threaded approach first.
-8. **Cross-request optimization** potential: receiving a batch of requests enables us to perform tasks such as compacting requests that cancel each other out (create followed by drop of the same source/query).
-   Another trick we could play is with query merging: if query requests within a single batch have a significant overlap, we can combine them and deploy only one or a few queries.
+**Advantages**:
+- Flexibility allows clients to do complex analytics based on the use case.
+- Additional metadata can be used directly by clients without touching the coordinator code.
 
-### Status Quo: no queueing, no batching
+**Disadvantages**:
+- Would use the query language dialect of the underlying system (e.g., SQLite), which is confusing.
+- Security issues (SQL injection); restriction of what is allowed to query is complex.
+- Compatibility issues when internal schema changes.
+- Faulty query results are passed to the client; we have no insight into what went wrong.
 
-Currently, the threads that "produce" the events, i.e., serve the user requests, also invoke the query planner and send off the query to the worker.
-This is not a viable approach for the reasons outlined in the problems section.
-It brings the catalogs, binder, planner, and query manager into the frontends and leads to weird concurrency issues that are hard to solve.
+**Proposal**:
+We should probably not allow external users and systems to write arbitrary SQL queries against our internal metadata.
+Instead, we carefully expose a set of requests that can be extended when required.
 
-### Alternative 1: multiple producers, multiple consumers (MPMC), no batching (instead use concurrency control mechanisms)
+### Should we allow updates?
+**Advantages**:
+- Clients may want to update a query to use a different source/sink, update the configuration of a particular source, update the port of a worker, etc.
 
-An MPMC message bus abstraction would allow for m consumer threads concurrently serving requests/events.
-Modifications lead to the same issues as described above, because the approach towards parallelism is **unstructured** and not targeted to the use case (threads pick tasks blindly and execute them).
-The degrees of freedom here are lower because **we do not control parallelism**, but only constrain it with locks/transactions.
+**Disadvantages**:
+- Updates can have dangerous side effects or prerequisites (e.g., the worker must be restarted with the new port) that are hard to check and handle.
+- Almost always create a chain of follow-up tasks or checks.
 
-### Alternative 2: SPSC/SPMC
+**Proposal**:
+We should only support CREATE/DROP requests against the coordinator.
+If the client made a mistake, a correction (drop and a new create) request must be submitted.
 
-Not viable, because we want to support multiple senders/producers.
-Otherwise, we would only be able to support serving requests from a single frontend, from a single thread at once.
+### Should deletes cascade/propagate automatically?
+On delete, references from other entities may be invalid.
+For example, when a logical source is dropped, queries that use it may fail.
 
-### Alternative 3: MPSC, no batching (continuous requests)
+**Advantages**:
+- Automatic propagation of deletes without further manual interference
 
-A possible approach that would allow for lower response times.
-However, it limits parallelism to tasks that can be derived from a single request.
-Also, we can approach this with the outlined preferred approach when lowering the timeout/batch size parameters anyway.
+**Disadvantages**:
+- Clients may not know or intend the consequences of a cascading delete
 
-## Pull/Lazy vs. Push/Eager State Updates
+**Proposal**:
+Handle it like Docker: return an error, or possibly a list of entities that use/refer to the thing to be dropped.
+The client must first drop all referring entities and try again.
+Later, we can implement optional cascading deletes.
 
-When managing resources such as the cluster state or the queries currently running in the system, we need workers to report their local state.
-These reports include information about their well-being, statistics, updated capabilities, outgoing network connections, and the status of local queries running on the worker.
-We can obtain this information in one of two ways:
-1. **Pull/Lazy**: We gather information lazily only when requested, for example, when a user queries the system or a deployment requires updated statistics.
-4. **Push/Eager**: workers periodically send these messages proactively, and the coordinator continuously integrates them into the most recent snapshot.
-   The pull-based approach can be implemented using RPC.
-   It is particularly effective when updates are infrequent or concern relatively small parts of the global deployment state.
-   In such cases, the overall number of messages exchanged within the system remains low.
-   The downsides are:
-- Every update requires an explicit request.
-- Each request incurs a network round-trip, leading to higher latency for the user.
+| Request Name           | Target Entity    | Type   | Arguments                                                                                   | Response                                                                 | Network Involved | Possible Errors                                                                                                                                                  |
+|------------------------|------------------|--------|---------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `GetLogicalSource`     | Logical Sources  | GET    | `by_name` (optional)                                                                        | `Result<LogicalSource, Err>`                                             | No               | `DoesNotExist`                                                                                                                                                   |
+| `GetPhysicalSource`    | Physical Sources | GET    | `for_logical` (optional)<br>`on_node` (optional)<br>`by_type` (optional)                    | `Result<Vec<PhysicalSource>, Err>`                                       | No               | `DoesNotExist`                                                                                                                                                   |
+| `GetSink`              | Sinks            | GET    | `by_name` (optional)<br>`on_node` (optional)<br>`by_type` (optional)                        | `Result<Vec<Sink>, Err>`                                                 | No               | `DoesNotExist`                                                                                                                                                   |
+| `GetQuery`             | Queries          | GET    | `by_id` (optional)<br>`with_state` (optional)<br>`on_worker` (optional)                     | `Result<Vec<Query>, Err>`                                                | Yes              | `DoesNotExist`<br>`NetworkError`                                                                                                                                 |
+| `DropLogicalSource`    | Logical Sources  | DROP   | `name`                                                                                      | `Result<Option<LogicalSource>, Err>`<br>(Some if exists, None otherwise) | No               | `ReferencedPhysicalSourceExists`                                                                                                                                 |
+| `DropPhysicalSource`   | Physical Sources | DROP   | `id`                                                                                        | `Result<Option<PhysicalSource>, Err>`                                    | No               | `ReferencedQueryExists`                                                                                                                                          |
+| `DropSink`             | Sinks            | DROP   | `name`                                                                                      | `Result<Option<Sink>, Err>`                                              | No               | `ReferencedQueryExists`                                                                                                                                          |
+| `DropQuery`            | Queries          | DROP   | `id`                                                                                        | `Result<Option<Query>, Err>`                                             | Yes              | `NetworkError`                                                                                                                                                   |
+| `CreateLogicalSource`  | Logical Sources  | CREATE | `name`<br>`schema`                                                                          | `Result<(), Err>`                                                        | No               | `AlreadyExists`<br>`EmptySchema`<br>`InvalidSchema`                                                                                                              |
+| `CreatePhysicalSource` | Physical Sources | CREATE | `logical_source_name`<br>`placement`<br>`source_type`<br>`source_config`<br>`parser_config` | `Result<PhysicalSourceId, Err>`                                          | No               | `AlreadyExists` (how to check that?)<br>`WorkerDoesNotExistForPhysical`<br>`LogicalSourceDoesNotExistForPhysical`<br>`SourceTypeDoesNotExist`<br>`InvalidConfig` |
+| `CreateSink`           | Sinks            | CREATE | `name`<br>`schema`<br>`placement`<br>`sink_type`<br>`config`                                | `Result<(), Err>`                                                        | No               | `AlreadyExists`<br>`WorkerDoesNotExistForSink`<br>`SinkTypeDoesNotExist`<br>`InvalidConfig`                                                                      |
+| `CreateQuery`          | Queries          | CREATE | `name` (optional)<br>`statement`<br>`sink`                                                  | `Result<Option<QueryId>, Err>`                                           | Yes              | `ParserError`<br>`NetworkError`<br>`SinkDoesNotExistForQuery`<br>`BinderError`<br>`OptimizerError`<br>`PlacementError`                                           |
+| `CreateWorkers`        | Workers          | CREATE | `host_name`<br>`grpc_port`<br>`data_port`<br>`num_slots`<br>`peers`                         | `Result<(), Err>`                                                        | Yes              | `NetworkError`                                                                                                                                                   |
 
-To the contrary, a push-based approach guarantees that when required, all pieces of information will be present in the last snapshot when needed.
-This works well under a high load of incoming requests to the coordinator.
-The required information will likely be accessible in this case, and no further network round-trip is necessary.
-Here, the downsides are the opposite:
-- Workers need to send updates frequently, burdening them with an additional load that might not actually be required.
-    - However, when thinking towards the future, we want to re-optimize continuously anyway, requiring an updated state from more than the requested query.
-- Similarly, the coordinator needs to integrate the state updates continuously into the following snapshot.
+## Fault Tolerance
 
-I am unsure what the better alternative would be, or whether a hybrid approach would be a reasonable starting point, depending on the message type.
-One major drawback of the pull-based approach is that requests that are in-flight during the current pass depend on the outcome of the RPC calls.
-This creates a choice: either the pass will be delayed until the last request in the batch is processed, or we defer incomplete requests to the next pass by resubmitting them into the message bus.
-Example: a user wants to deploy a new query.
-To plan the query, we require updated worker capabilities.
-We send requests to all workers in the cluster, but if one message is lost, the planning phase is blocked until a response is eventually received.
-After planning, the query must be deployed, which requires another round of communication with all nodes where parts of the query are assigned.
-These round-trips accumulate quickly, resulting in substantial query deployment latency, especially in a large cluster with many machines.
+Fault type
+Detection (from coordinators' POV)
+Handling (from coordinators' POV)
+Open Questions
+Worker process crashes
+RPC to worker fails
+1. Move the worker to unreachable  state
+2. Try to reconnect with a user-configurable strategy (e.g., exponential backoff, 3 times).
+3. On success, redeploy query fragments according to their last observed state (registered, started)
+4. On failure (after too many failed attempts), declare the worker dead and remove it from the cluster.
+   In case of failure, removing the worker has additional consequences:
+- Requests that arrived in the meantime and are related to the worker (even indirectly, like the creation of a source that is placed on the worker) should be responded to with an error; derived RPCs need to be cancelled
+- Related entities need to be deleted:
+- Network links
+- Physical sources
+- Query fragments and queries
+- Contact remaining workers and stop the query fragments related to the queries that were deployed on the failed worker.
+  What happens to requests that arrive during the retry that are in some way related to the worker?
+-
+- Option 1: defer them until the issue is sorted out.
+- Option 2: respond failure, let the sender retry later
 
-**We should support both push- and pull-based communication between workers and the coordinator.
-Especially when thinking about re-optimization passes, updated worker information is crucial (favoring a push-based approach).
-Still, as a first baseline, we can extend the current gRPC machinery to request information pull-based and iterate from there.**
+What happens to in-flight RPC requests that are currently waiting for a response?
+[TODO]
 
-## Consistency
-Instead of aiming at true/global consistency, we approach it with snapshots that are configurable in their granularity and behavior via the parameters mentioned.
-Achieving true consistency in a distributed system is challenging and comes at a high cost.
-With the proposed approach, the following things may happen:
-- Requests are denied because conflicting requests (CREATE/DROP) arrived within the same pass.
-- Queries are planned and deployed with out-of-date information within the configured timeouts.
-- Every request receives a response at most as fast as when the current path ends, but probably later.
+What if declaring the worker dead was a false positive (the network was interrupted) and the worker is still running?
+When reconnecting within the retry period, the resend must be idempotent (e.g., ignore a start query request if the query is already running). [Need to look into gRPC to see if the protocol does this, or if the application logic needs to do this]. If reconnecting fails, it does not matter to the coordinator.
 
-# 6. Programming Language
-**I propose to write the coordinator in Rust.**
-Because it is not dependent on the nautilus compiler in any way, this is generally possible.
-C++ and Rust can interoperate via foreign function interface (FFI), which was first used in the distributed PoC.
-In my opinion, there are lots of advantages to using Rust:
-- Memory safety even in the presence of concurrency
-- More ergonomic, improved error handling, and logging
-- Very pleasant abstractions for sending data between threads
-  (channels), exchanging messages via the network (serde crate, tokio networking library)
-- Mature ecosystem for asynchronous networking applications with good documentation (compared to `boost::asio`)
-- Rust's mighty enums make differentiating/dispatching different types of messages easy
-- ...without sacrificing speed.
+What are peer workers doing in the meantime?
+Currently, workers try to reconnect endlessly with their peers. This fits into the model of the coordinator resolving the issue. Downstream workers' query fragments are idle in the meantime, and upstream workers' queries apply backpressure on their sources. If the source system or protocol does not allow propagating backpressure, data will be lost (e.g., packet loss in UDP).
+Coordinator process crashes
+Needs to be detected by the user or the frontend
+1. Restart coordinator
+2. Load the latest snapshot from the database and rebuild the in-memory state.
+3. Continue processing messages.
+   What about the messages whose effects have not been applied/partially applied/not persisted?
+   Worker <=> worker network fault
+   It can't be detected currently
+   /* Nothing */
+   The workers will attempt to re-establish the connection until it is successful; the coordinator plays no role in this process.
+   A potential solution is to migrate parts of the query to other parts of the topology, reconfigure the network source/sink, or use another path through the topology for sending intermediate results. Currently, we have no logic on the worker side to implement this.
+   Coordinator => worker network fault
+   RPC to worker fails
+   Can't be distinguished from a worker crashing from the POV of the coordinator.
+   Therefore, apply the same strategy, ensuring the worker is idempotent with respect to updates it already has.
 
-Architecturally, the coordinator sits between the frontends/workers, which act as producers of messages, and the current NebulI components of the `QueryManager`, including the catalogs and planning components that process the messages.
-Therefore, we need to think about the language interaction C++ <--> Rust between the producers and consumers of the message bus.
 
-### Interface Frontends/Worker -> Coordinator
-The frontends and workers use the messaging interface to communicate with the coordinator.
-This means that the FFI is restricted to a few functions in the `MessageBus`.
-Messages themselves are required to be passed through the FFI boundary, which should be manageable since they will mostly contain primitive types or simple structures.
-With respect to flow control and a C++ execution context invoking the functions of the `MessageBus`, events are trivial because we do not need to await a result.
-Requests will need a conversion to something like `std::future` in cases where blocking is not desired.
-The networking interface for receiving messages will be implemented in Rust, so no special care is required when a C++ worker/frontend wants to send a message to a remote coordinator.
+## Control Flow and Consistency Model
 
-### Interface Coordinator -> Query Planning
-Because the coordinator manages the state of the deployment, the catalogs and the `QueryManager` will need to be ported to Rust, which is not a considerable amount of code.
-The parser, binder, global optimizer, placer, and decomposer, which create and transform logical query plans, should not need to be ported, as this would require porting the whole machinery around the `LogicalOperator` and `LogicalPlan`, which is unnecessary in the current state of the system.
-However, this means that we need to place an FFI boundary where Rust code of the coordinator calls into the C++ planner.
-The resulting logical plan needs to be sent to a remote worker, so it needs to be passed back to the coordinator.
-Regarding this, it would be easiest to pass a pointer instead of redefining the logical operator types on the Rust side to exchange the types by value.
+- We should use a consistent framework and programming model to update a deployment's state.
+1. Serialize requests on a single thread
+2. Batch up requests (may lead to anomalies like cancelled updates)
+3. Introduce transactions
+- Data from the same source (client) is guaranteed to be processed in order, allowing interleavings between different clients.
 
-### Alternative: C++ implementation
-We need asynchronous networking to manage the communication within the cluster, leaving us most likely with `boost::asio` or `zmq`.
-From my experience of working with `asio`, I much prefer the Rust ecosystem for the development of networking protocols and applications.
-It is better documented and actively maintained while offering an integration with the core language `async/await` that is miles ahead of the integration between C++ coroutines and its networking libraries.
-Moreover, this is an opportunity to move to a more modern replacement of C++ at a moment when it is possible.
-If we let this opportunity pass and write 10K LoC in C++, there will likely be no further attempt in the coming 3-5 years.
+### Write Skew
+![Write Skew Race Condition](/home/yannik/Downloads/write_skew.png)
 
-# 7. Implementation Plan
 
-Develop an MVP for the coordinator lib that resembles the current state of functionality and includes the following:
-- MessageBus that stores and distributes messages
-    - Sender handle for producers
-    - Receiver to consume & handle batches
-- Port catalogs to Rust
-- Port `QueryManager` including gRPC client to Rust
-- Single-threaded consumer pipeline that handles requests
-    - No extensions like batch compaction, only messages to handle the current functionality (no infrastructure changes, etc.)
-    - Dispatches them to handlers, i.e., the handler of a CREATE QUERY request would invoke the parser, planner, etc.
-- Adapt binaries in the system to use the new lib, move out all unnecessary code to use the new messaging interface
-    - Write FFI interop layer
+## Invariants
 
-# 8. Future Work
-- Persistence of state (catalogs/topology) in an (embedded) database for enhanced fault tolerance
-- Build testing infrastructure that goes beyond unit tests and our SLTs (possibly including fuzzing/property testing)
-- Parallelization of message processing
-- Support for shared query plans and query merging
+| Invariant/Property                                                      | Request                                   | Type        | Detection                                                                                     | Reaction                                                              |
+|-------------------------------------------------------------------------|-------------------------------------------|-------------|-----------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| Logical source `logical_source_name` unique                             | `CreateLogicalSource`                     | Uniqueness  | DB engine/check before insert                                                                 | Fail to process request                                               |
+| Logical source `Schema` non-empty, data types exist, field names valid? | `CreateLogicalSource`                     | Logic       | Check before request construction, on deserialization into a native type, or before insertion | Fail to process/construct request                                     |
+| Physical source unique?                                                 | `CreatePhysicalSource`                    | Uniqueness  | DB engine/check before insert (Eq --> all fields equal)                                       | Fail to process request                                               |
+| Physical source `worker` referenced exists                              | `CreatePhysicalSource`                    | Foreign Key | DB engine/check before insert                                                                 | Fail to process request                                               |
+| Physical source `logical` source references exists                      | `CreatePhysicalSource`                    | Foreign Key | DB engine/check before insert                                                                 | Fail to process request                                               |
+| Physical source `source_type` referenced exists                         | `CreatePhysicalSource`                    | Foreign Key | DB engine/check before insert                                                                 | Fail to process request                                               |
+| Physical source `source_config` and `parser_config` valid               | `CreatePhysicalSource`                    | Logic       | Validate descriptor                                                                           | Fail to process request                                               |
+| Sink `worker` referenced exists                                         | `CreateSink`                              | Foreign Key | DB engine/check before insert                                                                 | Fail to process request                                               |
+| Sink `sink_type` exists                                                 | `CreateSink`                              | Foreign Key | DB engine/check before insert                                                                 | Fail to process request                                               |
+| Sink `name` unique                                                      | `CreateSink`                              | Uniqueness  | DB engine, check before insert                                                                | Fail to process request                                               |
+| Sink `config` valid for sink type                                       | `CreateSink`                              | Logic       | Validate descriptor against sink type                                                         | Fail to process request                                               |
+| Query `statement` parseable                                             | `CreateQuery`                             | Logic       | Run parser on statement                                                                       | Fail to process request (ParserError)                                 |
+| Query AST bindable (i.e., sources/sink/etc exist)                       | `CreateQuery`                             | Logic       | Run binder on parsed AST                                                                      | Fail to process request (BinderError)                                 |
+| Query optimizable (valid query plan can be generated)                   | `CreateQuery`                             | Logic       | Run optimizer on bound statement                                                              | Fail to process request (OptimizerError)                              |
+| Exists a network path from sources to sink with sufficient capacity     | `CreateQuery`                             | Logic       | Run placer on optimized query plan                                                            | Fail to process request (PlacementError)                              |
+| Query running on either all or no workers                               | `CreateQuery`/`DropQuery`                 | Network     | Submit/remove query to/from all participating workers                                         | Retry x times, then spawn cleanup task until desired state is reached |
+| Capacity on each worker >= 0                                            | `CreateWorkers`/`CreateQuery`/`DropQuery` | Logic       | Check no queries use this sink                                                                | Fail to process request, show list of queries that use the sink       |
+| Worker `host_name` and ports valid                                      | `CreateWorkers`                           | Logic       | Check address format and port ranges                                                          | Fail to construct/process request                                     |
+| Worker `peers` referenced exist                                         | `CreateWorkers`                           | Foreign Key | Check after all workers have                                                                  | Fail to process request                                               |
+| Topology has no cycles                                                  | `CreateWorkers`                           | Logic       | Run validation after topology construction                                                    | Fail to process request                                               |
+| Topology has at least one src (in-degree 0) and one snk (out-degree 0)  | `CreateWorkers`                           | Logic       | Run validation after topology construction                                                    | Fail to process request                                               |
+| Every src/snk is reachable by at least one src/snk                      | `CreateWorkers`                           | Logic       | Run validation after topology construction                                                    | Fail to process request                                               |
+| Every worker reachable from the coordinator                             | `CreateWorkers`                           | Network     | Establish RPC connection to worker at startup of `ClusterService`                             | Retry x times, then fail to start coordinator (NetworkError)          |
+| Logical source not referenced by physical sources                       | `DropLogicalSource`                       | Foreign Key | Check no physical sources reference this logical source                                       | Fail to process request, show list of physical sources that violate   |
+| Physical source not referenced by queries                               | `DropPhysicalSource`                      | Foreign Key | Check no query fragments use this physical source                                             | Fail to process request, show list of queries that use the source     |
+| Sink not referenced by queries                                          | `DropSink`                                | Foreign Key | Check no queries use this sink                                                                | Fail to process request, show list of queries that use the sink       |
+
+### Open Questions
+- Do we want to impose constraints on the names for queries/sources/sinks?
+- How do we handle partially created/started queries?
+
+Concurrency Issues
+- Two or more CreateQuery/DropQuery Requests (placement conflicts)
+- CreateWorker/DropWorker request
+
+Idea: incorporate responsiveness into placement decisions
+
+## Testing
+
+As we aim to scale NES to large deployments, we need to face situations with many uncertainties, such as messages being lost or delayed, or nodes or processes crashing.
+Moreover, other parts of the system can't reliably know about the cause of the problems.
+The number of possible states of such a large system is exploding.
+Therefore, it is hard to enumerate all possible error scenarios beforehand via formal verification and make the system correct in the first place.
+On the other hand, techniques like chaos testing can validate system behavior, but can't guarantee the reproducibility of error cases.
+
+### Unit Testing
+Advantages:
+- Easy to set up and run.
+- Fast.
+
+Disadvantages:
+- Most correctness and reliability issues stem from interactions among modules/components.
+- Can't test error scenarios that include multiple nodes.
+
+### Formal Verification
+Advantages:
+- Provides mathematical guarantees of correctness for specified properties
+- Can prove the absence of certain classes of bugs
+- Catches subtle edge cases that are hard to find through testing
+- Design flaws are discovered early in the development process
+
+Disadvantages:
+- Requires significant expertise in formal methods and specialized tools (TLA+, Coq, etc.)
+- Time-consuming and expensive to create and maintain formal specifications
+- Difficult to model all aspects of a real system (I/O, performance characteristics, timing)
+- Gap between formal model and actual implementation may introduce bugs
+
+### Chaos Testing
+Advantages:
+- Tests system behavior under realistic failure conditions
+- Validates fault tolerance mechanisms in production or production-like environments
+- Builds confidence in system resilience
+- Discovers unexpected failure modes and interactions
+
+Disadvantages:
+- Non-deterministic: failures are hard to reproduce
+- Requires production-like infrastructure, which can be expensive
+- Difficult to achieve comprehensive coverage of failure scenarios
+- Results are probabilistic, not exhaustive
+
+### Deterministic Simulation Testing & Property Testing
+DST aims to deterministically test a system without requiring an actual distributed system with multiple processes or even multiple physical machines.
+It achieves this by removing all factors of uncertainty (multithreaded scheduler, random numbers, timing) by mocking the components responsible for them.
+We can combine DST with property-based testing, where we specify invariants/properties instead of manually designing test cases.
+The test system will then create inputs and test our invariants, while the DST system simulates an error-prone distributed system.
+On a failure, the property tester will try to explore the state space and find an easier input to reproduce the failure.
+The used seed will help us manually reproduce the error and fix the bug.
+
+Advantages:
+- Reproducible: same seed produces same execution sequence
+- Fast: can test thousands of scenarios without real network delays
+- Comprehensive: can explore many interleavings and failure scenarios systematically
+- Combines benefits of unit tests (speed, reproducibility) with integration testing (realistic scenarios)
+- Property-based testing to automatically create test cases
+- Can use techniques like state-space exploration to increase coverage
+
+Disadvantages:
+- Requires careful simulation framework design and maintenance
+- Simulated environment may not perfectly match production behavior
+- Time budget limits exhaustive exploration of large state spaces
+- Developers must write meaningful properties to check
+- Initial setup cost is higher than simple unit tests
+
+## Other Systems' Approaches
+
+### Legacy NES (Coordinator)
+
+
+### Flink (JobManager/Dispatcher)
+
+
+### Kafka (Controller/KRaft)
+
+
+### Spark Streaming
+
+
+### Materialize (adaptord)
+
+
+### RisingWave (meta)
+
+
+## Implementation Plan
+
+1. Implement an MVP that implements a coordinator lib with the following properties:
+    1. A single-threaded event loop that serializes the minimal set of requests mentioned.
+    2. Will not support:
+        1. Transactions
+        2. Statistics
+        3. Heartbeats
+        4. Infrastructure changes
+        5. Reoptimization passes
+        6. Network service interface for frontends or workers
+    3. Fail every request that would cause an invalid state or an invariant to be broken.
+    4. Have a test suite comprising property testing using a deterministic simulation framework.
+2. Iterate from there by:
+    1. Gradually turning unrecoverable errors into recoverable ones by implementing fault tolerance mechanisms (e.g., restarting query fragments on resumed workers, reconnecting to unreachable workers).
+    2. Extending the set of supported requests, making existing requests more powerful.
+    3. Introducing transactions.
+    4. Introducing dynamic cluster membership.
+    5. Introducing network endpoints for the coordinator so that it can be deployed as a standalone process or embedded into workers.
+    6. Triggering reoptimization passes using statistics.
+
+## Further Reading
+- [Deterministic Simulation Testing 1](https://risingwave.com/blog/deterministic-simulation-a-new-era-of-distributed-system-testing/)
+- [Deterministic Simulation Testing 2](https://risingwave.com/blog/applying-deterministic-simulation-the-risingwave-story-part-2-of-2/)
+- [MadSim](https://github.com/madsim-rs/madsim)

@@ -1,30 +1,34 @@
 use crate::data_model::sink::SinkName;
 use crate::data_model::worker::HostName;
-use crate::db_errors::{DatabaseError, ErrorTranslation};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
-use std::hash::{Hash, Hasher};
+use std::cmp::Ordering;
+use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-pub enum QueryState {
-    Pending,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum GlobalQueryState {
+    Pending,   // Query was (partially) submitted/started
+    Running,   // All query fragments are running
+    Completed, // Query completed by itself
+    Stopped,   // Query was stopped from the outside
+    Failed,    // Query failed
+}
+
+#[derive(Clone, Debug)]
+pub enum LocalQueryState {
+    Registered,
+    Started,
     Running,
-    Completed,
+    Stopped,
     Failed,
 }
 
 pub type QueryId = String;
 
-/// Query definition.
-///
-/// # Equality and Hashing
-/// Implements key-based equality: two queries are equal if they have the same `id`,
-/// regardless of statement, state, or sink.
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Query {
     pub id: QueryId,
-    pub statement: String,
-    pub state: QueryState,
+    pub stmt: String,
+    pub state: GlobalQueryState,
     pub sink: SinkName,
 }
 
@@ -36,73 +40,54 @@ impl PartialEq for Query {
 
 impl Eq for Query {}
 
-impl Hash for Query {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
+impl PartialOrd for Query {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+impl Ord for Query {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct QueryFragment {
     pub query_id: QueryId,
     pub worker_id: HostName,
-    pub state: QueryState,
+    pub state: LocalQueryState,
 }
 
+#[derive(Clone, Debug)]
 pub struct CreateQuery {
-    pub id: QueryId,
-    pub statement: String,
-    pub sink: SinkName,
+    pub name: QueryId,
+    pub stmt: String,
 }
 
-impl PartialEq for CreateQuery {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for CreateQuery {}
-
-impl Hash for CreateQuery {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-    }
-}
-
-impl ErrorTranslation for CreateQuery {
-    fn unique_violation(&self, _err: sqlx::Error) -> DatabaseError {
-        DatabaseError::QueryAlreadyExists {
-            id: self.id.clone(),
-        }
+impl CreateQuery {
+    pub fn new(stmt: &str) -> Self {
+        Self::with_name(Uuid::new_v4().into(), stmt)
     }
 
-    fn fk_violation(&self, _err: sqlx::Error) -> DatabaseError {
-        DatabaseError::SinkNotFoundForQuery {
-            sink_name: self.sink.clone(),
-            query_id: self.id.clone(),
+    pub fn with_name(name: QueryId, stmt: &str) -> Self {
+        CreateQuery {
+            name,
+            stmt: stmt.into(),
         }
     }
 }
 
-pub struct ShowQueries {
-    pub query_id: Option<QueryId>,
-    pub by_sink: Option<SinkName>,
-}
-
+#[derive(Clone, Debug)]
 pub struct DropQuery {
-    pub query_id: String,
+    pub with_id: Option<QueryId>,
+    pub with_state: Option<GlobalQueryState>,
+    pub on_worker: Option<HostName>,
 }
 
-impl PartialEq for DropQuery {
-    fn eq(&self, other: &Self) -> bool {
-        self.query_id == other.query_id
-    }
-}
-
-impl Eq for DropQuery {}
-
-impl Hash for DropQuery {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.query_id.hash(state);
-    }
+#[derive(Clone, Debug)]
+pub struct GetQuery {
+    pub with_id: Option<QueryId>,
+    pub with_state: Option<GlobalQueryState>,
+    pub on_worker: Option<HostName>,
 }

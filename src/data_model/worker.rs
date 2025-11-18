@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
-use std::hash::{Hash, Hasher};
-use crate::db_errors::{DatabaseError, ErrorTranslation};
+use std::fmt;
+use std::fmt::Formatter;
+use std::hash::Hash;
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 pub type HostName = String;
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Worker {
     pub host_name: HostName,
     pub grpc_port: u16,
@@ -13,56 +15,22 @@ pub struct Worker {
     pub num_slots: u32,
 }
 
-impl PartialEq for Worker {
-    fn eq(&self, other: &Self) -> bool {
-        self.host_name == other.host_name
-    }
-}
-
-impl Eq for Worker {}
-
-impl Hash for Worker {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.host_name.hash(state);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkLink {
     pub source_host: HostName,
     pub target_host: HostName,
 }
 
+#[derive(Debug, Clone)]
 pub struct CreateWorker {
     pub host_name: HostName,
     pub grpc_port: u16,
     pub data_port: u16,
     pub num_slots: u32,
+    pub peers: Vec<HostName>,
 }
 
-impl PartialEq for CreateWorker {
-    fn eq(&self, other: &Self) -> bool {
-        self.host_name == other.host_name
-    }
-}
-
-impl Eq for CreateWorker {}
-
-impl Hash for CreateWorker {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.host_name.hash(state);
-    }
-}
-
-impl ErrorTranslation for CreateWorker {
-    fn unique_violation(&self, _err: sqlx::Error) -> DatabaseError {
-        DatabaseError::WorkerAlreadyExists {
-            host_name: self.host_name.clone(),
-        }
-    }
-}
-
-pub struct ShowWorkers {
+pub struct GetWorker {
     pub host_name: Option<HostName>,
 }
 
@@ -70,17 +38,41 @@ pub struct DropWorker {
     pub host_name: HostName,
 }
 
-impl PartialEq for DropWorker {
-    fn eq(&self, other: &Self) -> bool {
-        self.host_name == other.host_name
+const GRPC_PORT: u16 = 50051;
+const BASE_IP: &str = "10.0.0.";
+static IP_SUFFIX: AtomicU16 = AtomicU16::new(1);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GrpcAddr {
+    host: HostName,
+    port: u16,
+}
+
+impl GrpcAddr {
+    pub fn new(host: String, port: u16) -> Self {
+        Self { host, port }
+    }
+
+    pub fn next_local() -> Self {
+        let suffix = IP_SUFFIX.fetch_add(1, Ordering::Relaxed);
+        // Ensure we stay within valid IP range (1-254)
+        let valid_suffix = ((suffix - 1) % 254) + 1;
+        let host = format!("{}{}", BASE_IP, valid_suffix);
+        Self {
+            host,
+            port: GRPC_PORT,
+        }
     }
 }
 
-impl Eq for DropWorker {}
-
-impl Hash for DropWorker {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.host_name.hash(state);
+impl From<&GrpcAddr> for SocketAddr {
+    fn from(value: &GrpcAddr) -> Self {
+        value.to_string().parse::<SocketAddr>().unwrap()
     }
 }
 
+impl fmt::Display for GrpcAddr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
+    }
+}

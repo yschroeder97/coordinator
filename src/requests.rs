@@ -1,10 +1,17 @@
-pub use crate::data_model::logical_source::{CreateLogicalSource, LogicalSource, ShowLogicalSources};
-pub use crate::data_model::physical_source::{
-    CreatePhysicalSource, PhysicalSource, ShowPhysicalSources,
+use crate::data_model::logical_source::DropLogicalSource;
+pub use crate::data_model::logical_source::{
+    CreateLogicalSource, LogicalSource, GetLogicalSource,
 };
-pub use crate::data_model::query::{CreateQuery, Query, ShowQueries};
-pub use crate::data_model::sink::{CreateSink, ShowSinks, Sink};
-pub use crate::data_model::worker::{CreateWorker, ShowWorkers, Worker};
+use crate::data_model::physical_source::DropPhysicalSource;
+pub use crate::data_model::physical_source::{
+    CreatePhysicalSource, PhysicalSource, GetPhysicalSource,
+};
+use crate::data_model::query::DropQuery;
+pub use crate::data_model::query::{CreateQuery, GetQuery, Query};
+use crate::data_model::sink::DropSink;
+pub use crate::data_model::sink::{CreateSink, GetSink, Sink};
+use crate::data_model::worker::DropWorker;
+pub use crate::data_model::worker::{CreateWorker, GetWorker, Worker};
 use crate::errors::CoordinatorError;
 
 // Request type aliases
@@ -14,48 +21,28 @@ pub type CreateSinkRequest = Request<CreateSink, Result<(), CoordinatorError>>;
 pub type CreateWorkerRequest = Request<CreateWorker, Result<(), CoordinatorError>>;
 pub type CreateQueryRequest = Request<CreateQuery, Result<(), CoordinatorError>>;
 
-pub type ShowLogicalSourcesRequest =
-    Request<ShowLogicalSources, Result<Vec<LogicalSource>, CoordinatorError>>;
-pub type ShowPhysicalSourcesRequest =
-    Request<ShowPhysicalSources, Result<Vec<PhysicalSource>, CoordinatorError>>;
-pub type ShowSinksRequest = Request<ShowSinks, Result<Vec<Sink>, CoordinatorError>>;
-pub type ShowWorkersRequest = Request<ShowWorkers, Result<Vec<Worker>, CoordinatorError>>;
-pub type ShowQueriesRequest = Request<ShowQueries, Result<Vec<Query>, CoordinatorError>>;
+pub type GetLogicalSourceRequest =
+    Request<GetLogicalSource, Result<Vec<LogicalSource>, CoordinatorError>>;
+pub type GetPhysicalSourceRequest =
+    Request<GetPhysicalSource, Result<Vec<PhysicalSource>, CoordinatorError>>;
+pub type GetSinkRequest = Request<GetSink, Result<Vec<Sink>, CoordinatorError>>;
+pub type GetWorkerRequest = Request<GetWorker, Result<Vec<Worker>, CoordinatorError>>;
+pub type GetQueryRequest = Request<GetQuery, Result<Vec<Query>, CoordinatorError>>;
 
-pub struct Request<Payload, Response> {
-    pub payload: Payload,
-    pub respond_to: flume::Sender<Response>,
+pub type DropLogicalSourceRequest = Request<DropLogicalSource, Result<(), CoordinatorError>>;
+pub type DropPhysicalSourceRequest = Request<DropPhysicalSource, Result<(), CoordinatorError>>;
+pub type DropSinkRequest = Request<DropSink, Result<(), CoordinatorError>>;
+pub type DropWorkerRequest = Request<DropWorker, Result<(), CoordinatorError>>;
+pub type DropQueryRequest = Request<DropQuery, Result<(), CoordinatorError>>;
+
+pub struct Request<P, R> {
+    pub payload: P,
+    pub respond_to: flume::Sender<R>,
 }
 
-impl<Payload, Response> Request<Payload, Response> {
-    pub fn respond(self, response: Response) -> Result<(), flume::SendError<Response>> {
+impl<P, R> Request<P, R> {
+    pub fn respond(&self, response: R) -> Result<(), flume::SendError<R>> {
         // Will not block, because there are no other senders
         self.respond_to.send(response)
     }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum DeltaTag {
-    Create,
-    Drop,
-    Show,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum BaseEntityTag {
-    LogicalSource,
-    PhysicalSource,
-    Sink,
-    Worker,
-    Query,
-}
-
-pub trait RequestHeader<KeyT> {
-    const DELTA: DeltaTag;
-    const ENTITY: BaseEntityTag;
-
-    type EntityData: differential_dataflow::Data;
-
-    fn to_entity_data(&self) -> Self::EntityData;
-    fn key(&self) -> KeyT;
 }
