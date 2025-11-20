@@ -1,6 +1,6 @@
 use thiserror::Error;
-use crate::cluster::ClusterServiceError;
-use crate::data_model::catalog_errors::CatalogError;
+use crate::network_service::NetworkServiceError;
+use crate::catalog::catalog_errors::CatalogError;
 
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -11,5 +11,5 @@ pub enum CoordinatorError {
     Database(#[from] CatalogError),
     // Cluster-related errors
     #[error("Error in cluster service")]
-    ClusterService(#[from] ClusterServiceError),
+    ClusterService(#[from] NetworkServiceError),
 }

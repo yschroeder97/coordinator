@@ -1,7 +1,7 @@
 use crate::test_config::TestConfig;
-use coordinator::cluster::ClusterService;
+use coordinator::network_service::NetworkService;
 use coordinator::coordinator::{start_coordinator, CoordinatorRequest, MessageBusSender};
-use coordinator::data_model::catalog::Catalog;
+use coordinator::catalog::catalog::Catalog;
 use std::sync::Once;
 use tracing::error;
 
@@ -30,7 +30,7 @@ pub fn init_tracing() {
 pub async fn setup_coordinator(conf: TestConfig) -> MessageBusSender<CoordinatorRequest> {
     init_tracing();
 
-    let cluster = ClusterService::create(conf.workers.clone()).unwrap_or_else(|e| {
+    let cluster = NetworkService::create(conf.workers.clone()).unwrap_or_else(|e| {
         error!("Failed to create cluster service: {}", e);
         std::process::exit(1);
     });

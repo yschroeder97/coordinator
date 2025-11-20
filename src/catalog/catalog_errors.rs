@@ -1,7 +1,7 @@
-use crate::data_model::logical_source::LogicalSourceName;
-use crate::data_model::query::QueryId;
-use crate::data_model::sink::SinkName;
-use crate::data_model::worker::HostName;
+use crate::catalog::logical_source::LogicalSourceName;
+use crate::catalog::query::QueryId;
+use crate::catalog::sink::SinkName;
+use crate::catalog::worker::HostName;
 use thiserror::Error;
 
 #[derive(Error, Debug)]

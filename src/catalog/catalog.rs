@@ -1,17 +1,17 @@
-use crate::data_model::catalog_errors::CatalogError;
-use crate::data_model::physical_source::{CreatePhysicalSource, DropPhysicalSource, SourceType};
-use crate::data_model::sink::{DropSink, SinkType};
+use crate::catalog::catalog_errors::CatalogError;
+use crate::catalog::logical_source::DropLogicalSource;
+use crate::catalog::physical_source::{CreatePhysicalSource, DropPhysicalSource, SourceType};
+use crate::catalog::sink::{DropSink, SinkType};
 use crate::requests::{CreateLogicalSource, CreateSink, CreateWorker};
 use sqlx::SqlitePool;
 use std::env;
-use crate::data_model::logical_source::DropLogicalSource;
 
 pub struct Catalog {
     pool: SqlitePool,
 }
 
 impl Catalog {
-    pub async fn from_pool(pool: SqlitePool) -> Result<Self, CatalogError> {
+    pub async fn from(pool: SqlitePool) -> Result<Self, CatalogError> {
         sqlx::migrate!()
             .run(&pool)
             .await
@@ -131,7 +131,10 @@ impl Catalog {
         Ok(())
     }
 
-    pub async fn drop_logical_source(&self, drop_logical: DropLogicalSource) -> Result<(), CatalogError> {
+    pub async fn drop_logical_source(
+        &self,
+        drop_logical: DropLogicalSource,
+    ) -> Result<(), CatalogError> {
         sqlx::query!(
             "DELETE FROM logical_sources WHERE name = ?",
             drop_logical.source_name
@@ -218,17 +221,19 @@ impl Catalog {
 #[cfg(test)]
 mod catalog_tests {
     use super::*;
-    use crate::data_model::physical_source::{PhysicalSourceKey, SourceType};
-    use crate::data_model::schema::{AttributeField, DataType, Schema};
-    use crate::data_model::sink::SinkType;
-    use crate::requests::{CreateLogicalSource, CreateSink, CreateWorker, LogicalSource, PhysicalSource, Worker};
+    use crate::catalog::logical_source::DropLogicalSource;
+    use crate::catalog::physical_source::SourceType;
+    use crate::catalog::schema::{AttributeField, DataType, Schema};
+    use crate::catalog::sink::SinkType;
+    use crate::requests::{
+        CreateLogicalSource, CreateSink, CreateWorker,
+    };
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
     use sqlx::sqlite::SqlitePoolOptions;
     use std::future::Future;
     use std::sync::OnceLock;
     use tokio::runtime::Runtime;
-    use crate::data_model::logical_source::DropLogicalSource;
 
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
@@ -248,7 +253,7 @@ mod catalog_tests {
         F: FnOnce(Catalog) -> Fut,
         Fut: Future<Output = T>,
     {
-        let catalog = Catalog::from_pool(
+        let catalog = Catalog::from(
             SqlitePoolOptions::new()
                 .connect(":memory:")
                 .await
@@ -338,26 +343,43 @@ mod catalog_tests {
     }
 
     #[derive(Debug, Clone)]
-    struct ConsistentPhysicalSource {
+    struct CreatePhysicalSourceWithRefs {
         create_logical: CreateLogicalSource,
         create_worker: CreateWorker,
         create_physical: CreatePhysicalSource,
     }
 
-    impl Arbitrary for ConsistentPhysicalSource {
+    impl Arbitrary for CreatePhysicalSourceWithRefs {
         fn arbitrary(g: &mut Gen) -> Self {
-            let mut consistent = ConsistentPhysicalSource {
+            let mut requests = CreatePhysicalSourceWithRefs {
                 create_logical: CreateLogicalSource::arbitrary(g),
                 create_worker: CreateWorker::arbitrary(g),
                 create_physical: CreatePhysicalSource::arbitrary(g),
             };
 
-            consistent.create_physical.logical_source = consistent.create_logical.source_name.clone();
-            consistent.create_physical.placement = consistent.create_worker.host_name.clone();
-            consistent
+            requests.create_physical.logical_source = requests.create_logical.source_name.clone();
+            requests.create_physical.placement = requests.create_worker.host_name.clone();
+            requests
         }
     }
 
+    #[derive(Debug, Clone)]
+    struct CreateSinkWithRefs {
+        create_sink: CreateSink,
+        create_worker: CreateWorker,
+    }
+
+    impl Arbitrary for CreateSinkWithRefs {
+        fn arbitrary(g: &mut Gen) -> Self {
+            let mut requests = CreateSinkWithRefs {
+                create_sink: CreateSink::arbitrary(g),
+                create_worker: CreateWorker::arbitrary(g),
+            };
+
+            requests.create_sink.placement = requests.create_worker.host_name.clone();
+            requests
+        }
+    }
 
     fn test_prop<F, Fut>(test_fn: F) -> bool
     where
@@ -373,32 +395,36 @@ mod catalog_tests {
     #[quickcheck]
     fn logical_name_is_unique(create_source: CreateLogicalSource) -> bool {
         test_prop(|catalog| async move {
-            catalog.create_logical_source(&create_source).await
+            catalog
+                .create_logical_source(&create_source)
+                .await
                 .expect("First logical source creation should succeed");
-            
+
             assert!(
                 catalog.create_logical_source(&create_source).await.is_err(),
-                "Duplicate logical source name '{}' should be rejected", 
+                "Duplicate logical source name '{}' should be rejected",
                 create_source.source_name
             );
         })
     }
 
     #[quickcheck]
-    fn sink_name_is_unique(create_worker: CreateWorker, mut create_sink: CreateSink) -> bool {
+    fn sink_name_is_unique(req: CreateSinkWithRefs) -> bool {
         test_prop(|catalog| async move {
-            create_sink.placement = create_worker.host_name.clone();
-
-            catalog.create_workers(&[create_worker]).await
+            catalog
+                .create_workers(&[req.create_worker])
+                .await
                 .expect("Worker setup should succeed");
 
-            catalog.create_sink(&create_sink).await
+            catalog
+                .create_sink(&req.create_sink)
+                .await
                 .expect("First sink creation should succeed");
-            
+
             assert!(
-                catalog.create_sink(&create_sink).await.is_err(),
+                catalog.create_sink(&req.create_sink).await.is_err(),
                 "Duplicate sink name '{}' should be rejected",
-                create_sink.name
+                req.create_sink.name
             );
         })
     }
@@ -425,40 +451,63 @@ mod catalog_tests {
 
     #[quickcheck]
     fn physical_source_refs_exist(
-        mut req: ConsistentPhysicalSource,
+        req: CreatePhysicalSourceWithRefs,
     ) -> bool {
         test_prop(|catalog| async move {
-            catalog.create_logical_source(&req.create_logical).await
-                .expect("Logical source creation should succeed");
-            catalog.create_workers(&[req.create_worker]).await
-                .expect("Worker creation should succeed");
-            catalog.create_physical_source(&req.create_physical).await
-                .expect("Physical source with valid refs should succeed");
-
-            req.create_physical.logical_source = format!("nonexistent_{}", req.create_logical.source_name);
             assert!(
-                catalog.create_physical_source(&req.create_physical).await.is_err(),
-                "Physical source with non-existent logical source '{}' should be rejected",
-                req.create_physical.logical_source
+                catalog
+                    .create_physical_source(&req.create_physical)
+                    .await
+                    .is_err(),
+                "Physical source with missing refs should be rejected",
             );
+
+            catalog
+                .create_logical_source(&req.create_logical)
+                .await
+                .expect("Logical source creation should succeed");
+
+            assert!(
+                catalog
+                    .create_physical_source(&req.create_physical)
+                    .await
+                    .is_err(),
+                "Physical source with missing worker ref should be rejected",
+            );
+
+            catalog
+                .create_workers(&[req.create_worker])
+                .await
+                .expect("Worker creation should succeed");
+
+            catalog
+                .create_physical_source(&req.create_physical)
+                .await
+                .expect("Physical source with valid refs should succeed");
         })
     }
 
     #[quickcheck]
-    fn logical_source_drop_with_references_fails(create_req: ConsistentPhysicalSource) -> bool {
+    fn logical_source_drop_with_references_fails(create_req: CreatePhysicalSourceWithRefs) -> bool {
         test_prop(|catalog| async move {
-            catalog.create_logical_source(&create_req.create_logical).await
+            catalog
+                .create_logical_source(&create_req.create_logical)
+                .await
                 .expect("CreateLogicalSource should succeed");
-            catalog.create_workers(&[create_req.create_worker.clone()]).await
+            catalog
+                .create_workers(&[create_req.create_worker.clone()])
+                .await
                 .expect("CreateWorker should succeed");
-            catalog.create_physical_source(&create_req.create_physical).await
+            catalog
+                .create_physical_source(&create_req.create_physical)
+                .await
                 .expect("CreatePhysicalSource should succeed");
 
             // Property: Cannot drop logical source while physical sources reference it
-            let drop_request = DropLogicalSource { 
-                source_name: create_req.create_logical.source_name.clone() 
+            let drop_request = DropLogicalSource {
+                source_name: create_req.create_logical.source_name.clone(),
             };
-            
+
             assert!(
                 catalog.drop_logical_source(drop_request).await.is_err(),
                 "Should not be able to drop logical source '{}' while physical sources reference it",
@@ -472,7 +521,7 @@ mod catalog_tests {
         use std::collections::HashSet;
         use strum::IntoEnumIterator;
 
-        let catalog = Catalog::from_pool(pool)
+        let catalog = Catalog::from(pool)
             .await
             .expect("Failed to create catalog");
 
@@ -495,7 +544,7 @@ mod catalog_tests {
         use std::collections::HashSet;
         use strum::IntoEnumIterator;
 
-        let catalog = Catalog::from_pool(pool)
+        let catalog = Catalog::from(pool)
             .await
             .expect("Failed to create catalog");
 

@@ -15,7 +15,7 @@ use worker_rpc_service::{
 type QueryId = String;
 
 #[derive(Default, Clone, PartialEq)]
-enum InternalQueryState {
+enum QueryFragmentState {
     #[default]
     Registered,
     Running,
@@ -23,13 +23,13 @@ enum InternalQueryState {
     Failed,
 }
 
-impl From<InternalQueryState> for i32 {
-    fn from(state: InternalQueryState) -> i32 {
+impl From<QueryFragmentState> for i32 {
+    fn from(state: QueryFragmentState) -> i32 {
         match state {
-            InternalQueryState::Registered => 0,
-            InternalQueryState::Running => 2,
-            InternalQueryState::Stopped => 3,
-            InternalQueryState::Failed => 4,
+            QueryFragmentState::Registered => 0,
+            QueryFragmentState::Running => 2,
+            QueryFragmentState::Stopped => 3,
+            QueryFragmentState::Failed => 4,
         }
     }
 }
@@ -40,7 +40,7 @@ pub mod worker_rpc_service {
 
 #[derive(Default, Clone)]
 struct Query {
-    state: InternalQueryState,
+    state: QueryFragmentState,
     started: u64,
     terminated: u64,
     error: bool,
@@ -127,7 +127,7 @@ impl WorkerRpcService for SingleNodeWorker {
     ) -> Result<Response<()>, Status> {
         let query_id = &request.get_ref().query_id;
         self.with_query_mut(query_id, |query| {
-            query.state = InternalQueryState::Running;
+            query.state = QueryFragmentState::Running;
             query.started = Self::current_timestamp_ms();
             info!("Started query");
         })?;
@@ -138,7 +138,7 @@ impl WorkerRpcService for SingleNodeWorker {
     async fn stop_query(&self, request: Request<StopQueryRequest>) -> Result<Response<()>, Status> {
         let query_id = &request.get_ref().query_id;
         self.with_query_mut(query_id, |query| {
-            query.state = InternalQueryState::Stopped;
+            query.state = QueryFragmentState::Stopped;
             query.terminated = Self::current_timestamp_ms();
             info!("Stopped query");
         })?;
@@ -174,7 +174,7 @@ impl WorkerRpcService for SingleNodeWorker {
     ) -> Result<Response<WorkerStatusResponse>, Status> {
         let queries = self.queries.read().unwrap();
         let (terminated, active): (Vec<_>, Vec<_>) = queries.iter().partition(|(_, query)| {
-            query.state == InternalQueryState::Failed || query.state == InternalQueryState::Stopped
+            query.state == QueryFragmentState::Failed || query.state == QueryFragmentState::Stopped
         });
 
         let active_queries = active

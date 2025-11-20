@@ -268,6 +268,7 @@ name = "coordinator"
 version = "0.1.0"
 dependencies = [
  "flume",
+ "madsim",
  "madsim-tonic",
  "madsim-tonic-build",
  "prost",
@@ -2216,7 +2217,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2 0.6.1",

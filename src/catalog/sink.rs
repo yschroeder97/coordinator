@@ -1,4 +1,4 @@
-use crate::data_model::worker::HostName;
+use crate::catalog::worker::HostName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use strum::EnumIter;

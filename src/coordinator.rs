@@ -1,12 +1,10 @@
-use crate::cluster::ClusterService;
-use crate::data_model::catalog::Catalog;
-use crate::data_model::worker::GrpcAddr;
+use crate::network_service::NetworkService;
+use crate::catalog::catalog::Catalog;
 use crate::errors::CoordinatorError;
 pub use crate::message_bus::{message_bus, MessageBusReceiver, MessageBusSender};
 use crate::requests::{
-    CreateLogicalSourceRequest, CreatePhysicalSourceRequest, CreateQueryRequest, CreateSinkRequest,
-    CreateWorkerRequest, DropLogicalSourceRequest, DropPhysicalSourceRequest, DropQueryRequest,
-    DropSinkRequest, DropWorkerRequest, GetLogicalSourceRequest, GetPhysicalSourceRequest,
+    CreateLogicalSourceRequest, CreatePhysicalSourceRequest, CreateQueryRequest, CreateSinkRequest, DropLogicalSourceRequest, DropPhysicalSourceRequest, DropQueryRequest,
+    DropSinkRequest, GetLogicalSourceRequest, GetPhysicalSourceRequest,
     GetQueryRequest, GetSinkRequest, GetWorkerRequest,
 };
 use tracing::error;
@@ -15,7 +13,6 @@ pub enum CoordinatorRequest {
     CreateLogicalSource(CreateLogicalSourceRequest),
     CreatePhysicalSource(CreatePhysicalSourceRequest),
     CreateSink(CreateSinkRequest),
-    CreateWorker(CreateWorkerRequest),
     CreateQuery(CreateQueryRequest),
     ShowLogicalSources(GetLogicalSourceRequest),
     ShowPhysicalSources(GetPhysicalSourceRequest),
@@ -25,7 +22,6 @@ pub enum CoordinatorRequest {
     DropLogicalSource(DropLogicalSourceRequest),
     DropPhysicalSource(DropPhysicalSourceRequest),
     DropSink(DropSinkRequest),
-    DropWorker(DropWorkerRequest),
     DropQuery(DropQueryRequest),
 }
 
@@ -50,7 +46,6 @@ impl_from!(
     CoordinatorRequest
 );
 impl_from!(CreateSink, CreateSinkRequest, CoordinatorRequest);
-impl_from!(CreateWorker, CreateWorkerRequest, CoordinatorRequest);
 impl_from!(CreateQuery, CreateQueryRequest, CoordinatorRequest);
 
 impl_from!(
@@ -77,14 +72,13 @@ impl_from!(
     CoordinatorRequest
 );
 impl_from!(DropSink, DropSinkRequest, CoordinatorRequest);
-impl_from!(DropWorker, DropWorkerRequest, CoordinatorRequest);
 impl_from!(DropQuery, DropQueryRequest, CoordinatorRequest);
 
 const DEFAULT_BATCH_SIZE: usize = 16;
 
 pub fn start_coordinator(
     batch_size: Option<usize>,
-    cluster: ClusterService,
+    cluster: NetworkService,
     catalog: Catalog,
 ) -> MessageBusSender<CoordinatorRequest> {
     let (sender, receiver) =
@@ -99,14 +93,14 @@ pub fn start_coordinator(
 
 pub struct Coordinator {
     receiver: MessageBusReceiver<CoordinatorRequest>,
-    cluster: ClusterService,
+    cluster: NetworkService,
     catalog: Catalog,
 }
 
 impl Coordinator {
     pub fn new(
         receiver: MessageBusReceiver<CoordinatorRequest>,
-        cluster: ClusterService,
+        cluster: NetworkService,
         catalog: Catalog,
     ) -> Coordinator {
         Self {
@@ -116,18 +110,15 @@ impl Coordinator {
         }
     }
 
-    pub fn run(mut self) -> () {
+    pub async fn run(mut self) -> () {
         while let Some(req) = self.receiver.recv() {
             match req {
                 CoordinatorRequest::CreateLogicalSource(_create_logical) => {}
                 CoordinatorRequest::CreatePhysicalSource(_create_physical) => {}
                 CoordinatorRequest::CreateSink(_create_sink) => {}
-                CoordinatorRequest::CreateWorker(_create_worker) => {}
                 CoordinatorRequest::CreateQuery(create_query) => {
-                    let worker_addrs: Vec<GrpcAddr> =
-                        self.cluster.membership.keys().cloned().collect();
                     let result: Result<(), CoordinatorError> = (|| {
-                        self.cluster.submit_query(worker_addrs).map_err(|e| {
+                        self.cluster.submit_query(create_query.payload.on_workers).await.map_err(|e| {
                             error!("Failed to submit query to cluster: {:?}", e);
                             CoordinatorError::ClusterService(e)
                         })?;
@@ -147,7 +138,6 @@ impl Coordinator {
                 CoordinatorRequest::DropLogicalSource(_drop_logical) => {}
                 CoordinatorRequest::DropPhysicalSource(_drop_physical) => {}
                 CoordinatorRequest::DropSink(_drop_sink) => {}
-                CoordinatorRequest::DropWorker(_drop_worker) => {}
                 CoordinatorRequest::DropQuery(_drop_query) => {}
             }
         }

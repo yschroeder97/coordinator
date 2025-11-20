@@ -1,4 +1,4 @@
-use coordinator::data_model::worker::GrpcAddr;
+use coordinator::catalog::worker::GrpcAddr;
 
 #[derive(Clone)]
 pub struct TestConfig {

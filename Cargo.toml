@@ -5,9 +5,10 @@ edition = "2021"
 authors = ["Yannik Schroeder <yannik.schroeder@tu-berlin.de>"]
 
 [dependencies]
+madsim = { version = "0.2", features = ["macros"] }
 tonic = { version = "0.5", package = "madsim-tonic" }
 prost = { version = "0.13.5" }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 flume = "0.11.1"
@@ -28,4 +29,4 @@ features = [
 ]
 
 [build-dependencies]
-tonic-build = { version = "0.5.0", package = "madsim-tonic-build" }
+tonic-build = { version = "0.5", package = "madsim-tonic-build" }

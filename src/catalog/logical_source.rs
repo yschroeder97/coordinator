@@ -1,5 +1,5 @@
 use std::hash::{Hash, Hasher};
-use crate::data_model::schema::Schema;
+use crate::catalog::schema::Schema;
 use serde::{Deserialize, Serialize};
 
 pub type LogicalSourceName = String;

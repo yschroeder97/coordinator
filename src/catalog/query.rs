@@ -1,5 +1,5 @@
-use crate::data_model::sink::SinkName;
-use crate::data_model::worker::HostName;
+use crate::catalog::sink::SinkName;
+use crate::catalog::worker::{GrpcAddr, HostName};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use uuid::Uuid;
@@ -40,18 +40,6 @@ impl PartialEq for Query {
 
 impl Eq for Query {}
 
-impl PartialOrd for Query {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Query {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.id.cmp(&other.id)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct QueryFragment {
     pub query_id: QueryId,
@@ -63,17 +51,19 @@ pub struct QueryFragment {
 pub struct CreateQuery {
     pub name: QueryId,
     pub stmt: String,
+    pub on_workers: Vec<GrpcAddr>,
 }
 
 impl CreateQuery {
-    pub fn new(stmt: &str) -> Self {
-        Self::with_name(Uuid::new_v4().into(), stmt)
+    pub fn new(stmt: &str, on_workers: Vec<GrpcAddr>) -> Self {
+        Self::with_name(Uuid::new_v4().into(), stmt, on_workers)
     }
 
-    pub fn with_name(name: QueryId, stmt: &str) -> Self {
+    pub fn with_name(name: QueryId, stmt: &str, on_workers: Vec<GrpcAddr>) -> Self {
         CreateQuery {
             name,
             stmt: stmt.into(),
+            on_workers,
         }
     }
 }

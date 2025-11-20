@@ -1,7 +1,7 @@
-use crate::data_model::catalog_errors::CatalogError;
-use crate::data_model::catalog_errors::CatalogError::EmptyPredicate;
-use crate::data_model::logical_source::LogicalSourceName;
-use crate::data_model::worker::HostName;
+use crate::catalog::catalog_errors::CatalogError;
+use crate::catalog::catalog_errors::CatalogError::EmptyPredicate;
+use crate::catalog::logical_source::LogicalSourceName;
+use crate::catalog::worker::HostName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use strum::EnumIter;
@@ -41,14 +41,6 @@ pub struct PhysicalSource {
     pub source_type: SourceType,
     pub source_config: HashMap<String, String>,
     pub parser_config: HashMap<String, String>,
-}
-
-// Composite key for identifying physical sources
-#[derive(Debug, Clone)]
-pub struct PhysicalSourceKey {
-    pub logical_source: LogicalSourceName,
-    pub placement: HostName,
-    pub source_type: SourceType,
 }
 
 #[derive(Clone, Debug)]

@@ -1,17 +1,17 @@
-use crate::data_model::logical_source::DropLogicalSource;
-pub use crate::data_model::logical_source::{
+use crate::catalog::logical_source::DropLogicalSource;
+pub use crate::catalog::logical_source::{
     CreateLogicalSource, LogicalSource, GetLogicalSource,
 };
-use crate::data_model::physical_source::DropPhysicalSource;
-pub use crate::data_model::physical_source::{
+use crate::catalog::physical_source::DropPhysicalSource;
+pub use crate::catalog::physical_source::{
     CreatePhysicalSource, PhysicalSource, GetPhysicalSource,
 };
-use crate::data_model::query::DropQuery;
-pub use crate::data_model::query::{CreateQuery, GetQuery, Query};
-use crate::data_model::sink::DropSink;
-pub use crate::data_model::sink::{CreateSink, GetSink, Sink};
-use crate::data_model::worker::DropWorker;
-pub use crate::data_model::worker::{CreateWorker, GetWorker, Worker};
+use crate::catalog::query::DropQuery;
+pub use crate::catalog::query::{CreateQuery, GetQuery, Query};
+use crate::catalog::sink::DropSink;
+pub use crate::catalog::sink::{CreateSink, GetSink, Sink};
+use crate::catalog::worker::DropWorker;
+pub use crate::catalog::worker::{CreateWorker, GetWorker, Worker};
 use crate::errors::CoordinatorError;
 
 // Request type aliases
@@ -34,6 +34,7 @@ pub type DropPhysicalSourceRequest = Request<DropPhysicalSource, Result<(), Coor
 pub type DropSinkRequest = Request<DropSink, Result<(), CoordinatorError>>;
 pub type DropWorkerRequest = Request<DropWorker, Result<(), CoordinatorError>>;
 pub type DropQueryRequest = Request<DropQuery, Result<(), CoordinatorError>>;
+
 
 pub struct Request<P, R> {
     pub payload: P,
