@@ -1,6 +1,6 @@
-use thiserror::Error;
-use crate::network_service::NetworkServiceError;
 use crate::catalog::catalog_errors::CatalogError;
+use crate::network_service::NetworkServiceError;
+use thiserror::Error;
 
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 

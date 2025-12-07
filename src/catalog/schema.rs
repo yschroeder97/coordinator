@@ -34,4 +34,3 @@ impl Schema {
         Self { fields }
     }
 }
-

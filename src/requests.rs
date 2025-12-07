@@ -1,10 +1,8 @@
 use crate::catalog::logical_source::DropLogicalSource;
-pub use crate::catalog::logical_source::{
-    CreateLogicalSource, LogicalSource, GetLogicalSource,
-};
+pub use crate::catalog::logical_source::{CreateLogicalSource, GetLogicalSource, LogicalSource};
 use crate::catalog::physical_source::DropPhysicalSource;
 pub use crate::catalog::physical_source::{
-    CreatePhysicalSource, PhysicalSource, GetPhysicalSource,
+    CreatePhysicalSource, GetPhysicalSource, PhysicalSource,
 };
 use crate::catalog::query::DropQuery;
 pub use crate::catalog::query::{CreateQuery, GetQuery, Query};
@@ -35,7 +33,6 @@ pub type DropSinkRequest = Request<DropSink, Result<(), CoordinatorError>>;
 pub type DropWorkerRequest = Request<DropWorker, Result<(), CoordinatorError>>;
 pub type DropQueryRequest = Request<DropQuery, Result<(), CoordinatorError>>;
 
-
 pub struct Request<P, R> {
     pub payload: P,
     pub respond_to: flume::Sender<R>,
@@ -43,7 +40,7 @@ pub struct Request<P, R> {
 
 impl<P, R> Request<P, R> {
     pub fn respond(&self, response: R) -> Result<(), flume::SendError<R>> {
-        // Will not block, because there are no other senders
+        // Will not block, because this is a oneshot channel
         self.respond_to.send(response)
     }
 }

@@ -1,4 +1,3 @@
-use std::hash::{Hash, Hasher};
 use crate::catalog::schema::Schema;
 use serde::{Deserialize, Serialize};
 
@@ -9,20 +8,6 @@ pub struct LogicalSource {
     pub name: LogicalSourceName,
     pub schema: Schema,
 }
-
-impl Hash for LogicalSource {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.name.hash(state)
-    }
-}
-
-impl PartialEq for LogicalSource {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl Eq for LogicalSource {}
 
 #[derive(Clone, Debug)]
 pub struct CreateLogicalSource {

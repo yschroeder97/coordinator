@@ -1,6 +1,7 @@
-pub mod network_service;
+mod catalog;
+mod controllers;
 pub mod coordinator;
-pub mod catalog;
 pub mod errors;
 mod message_bus;
+mod network;
 mod requests;

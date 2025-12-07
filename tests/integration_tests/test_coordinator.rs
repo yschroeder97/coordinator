@@ -1,3 +1,6 @@
+#![cfg(madsim)]
+use crate::worker::worker_rpc_service::worker_rpc_service_server::WorkerRpcServiceServer;
+use crate::worker::SingleNodeWorker;
 use madsim::{
     net::NetSim,
     rand::{thread_rng, Rng},
@@ -9,8 +12,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tonic::transport::Server;
-use crate::worker::SingleNodeWorker;
-use crate::worker::worker_rpc_service::worker_rpc_service_server::WorkerRpcServiceServer;
 
 #[madsim::test]
 async fn basic() {

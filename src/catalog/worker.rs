@@ -12,13 +12,16 @@ pub struct Worker {
     pub host_name: HostName,
     pub grpc_port: u16,
     pub data_port: u16,
-    pub num_slots: u32,
+    pub capacity: u32,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkLink {
-    pub source_host: HostName,
-    pub target_host: HostName,
+    pub src_host_name: HostName,
+    pub src_grpc_port: u16,
+    pub dst_host_name: HostName,
+    pub dst_grpc_port: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -26,8 +29,8 @@ pub struct CreateWorker {
     pub host_name: HostName,
     pub grpc_port: u16,
     pub data_port: u16,
-    pub num_slots: u32,
-    pub peers: Vec<HostName>,
+    pub capacity: u32,
+    pub peers: Vec<GrpcAddr>,
 }
 
 pub struct GetWorker {
@@ -36,6 +39,7 @@ pub struct GetWorker {
 
 pub struct DropWorker {
     pub host_name: HostName,
+    pub grpc_port: u16,
 }
 
 const GRPC_PORT: u16 = 50051;
@@ -51,6 +55,14 @@ pub struct GrpcAddr {
 impl GrpcAddr {
     pub fn new(host: String, port: u16) -> Self {
         Self { host, port }
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     pub fn next_local() -> Self {

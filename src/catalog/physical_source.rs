@@ -1,12 +1,14 @@
 use crate::catalog::catalog_errors::CatalogError;
 use crate::catalog::catalog_errors::CatalogError::EmptyPredicate;
 use crate::catalog::logical_source::LogicalSourceName;
-use crate::catalog::worker::HostName;
+use crate::catalog::worker::{GrpcAddr, HostName};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use strum::EnumIter;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, EnumIter, Eq, PartialEq, Hash)]
+pub type PhysicalSourceId = i64;
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, sqlx::Type, EnumIter)]
 #[sqlx(type_name = "TEXT")]
 pub enum SourceType {
     File,
@@ -22,22 +24,12 @@ impl std::fmt::Display for SourceType {
     }
 }
 
-impl std::str::FromStr for SourceType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "File" => Ok(SourceType::File),
-            "Tcp" => Ok(SourceType::Tcp),
-            _ => Err(format!("Unknown source type: {}", s)),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PhysicalSource {
+    pub id: PhysicalSourceId,
     pub logical_source: LogicalSourceName,
-    pub placement: HostName,
+    pub placement_host_name: HostName,
+    pub placement_grpc_port: u16,
     pub source_type: SourceType,
     pub source_config: HashMap<String, String>,
     pub parser_config: HashMap<String, String>,
@@ -46,7 +38,8 @@ pub struct PhysicalSource {
 #[derive(Clone, Debug)]
 pub struct CreatePhysicalSource {
     pub logical_source: LogicalSourceName,
-    pub placement: HostName,
+    pub placement_host_name: HostName,
+    pub placement_grpc_port: u16,
     pub source_type: SourceType,
     pub source_config: HashMap<String, String>,
     pub parser_config: HashMap<String, String>,
@@ -54,31 +47,31 @@ pub struct CreatePhysicalSource {
 
 #[derive(Clone, Debug)]
 pub struct GetPhysicalSource {
-    pub for_logical_source: Option<LogicalSourceName>,
-    pub on_node: Option<HostName>,
-    pub by_type: Option<SourceType>,
+    pub with_logical_source: Option<LogicalSourceName>,
+    pub on_worker: Option<GrpcAddr>,
+    pub with_type: Option<SourceType>,
 }
 
 #[derive(Clone, Debug)]
 pub struct DropPhysicalSource {
     pub with_logical_source: Option<LogicalSourceName>,
-    pub on_node: Option<HostName>,
-    pub by_type: Option<SourceType>,
+    pub on_worker: Option<GrpcAddr>,
+    pub with_type: Option<SourceType>,
 }
 
 impl DropPhysicalSource {
     pub fn new(
         with_logical_source: Option<LogicalSourceName>,
-        on_node: Option<HostName>,
-        by_type: Option<SourceType>,
+        on_worker: Option<GrpcAddr>,
+        with_type: Option<SourceType>,
     ) -> Result<Self, CatalogError> {
-        if with_logical_source.is_none() && on_node.is_none() && by_type.is_none() {
+        if with_logical_source.is_none() && on_worker.is_none() && with_type.is_none() {
             return Err(EmptyPredicate {});
         }
         Ok(Self {
             with_logical_source,
-            on_node,
-            by_type,
+            on_worker,
+            with_type,
         })
     }
 }

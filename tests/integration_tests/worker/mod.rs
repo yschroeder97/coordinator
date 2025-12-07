@@ -5,7 +5,7 @@ use tonic::{Request, Response, Status};
 use tracing::{error, info, instrument};
 use uuid::Uuid;
 
-use worker_rpc_service::worker_rpc_service_server::{WorkerRpcService};
+use worker_rpc_service::worker_rpc_service_server::WorkerRpcService;
 use worker_rpc_service::worker_status_response::{ActiveQuery, TerminatedQuery};
 use worker_rpc_service::{
     QueryLogReply, QueryLogRequest, QueryStatusReply, QueryStatusRequest, RegisterQueryReply,

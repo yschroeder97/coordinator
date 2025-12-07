@@ -8,7 +8,7 @@ authors = ["Yannik Schroeder <yannik.schroeder@tu-berlin.de>"]
 madsim = { version = "0.2", features = ["macros"] }
 tonic = { version = "0.5", package = "madsim-tonic" }
 prost = { version = "0.13.5" }
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.0", features = ["rt-multi-thread"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 flume = "0.11.1"
@@ -16,7 +16,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0.17"
 sqlx = { version = "0.9.0-alpha.1", features = ["sqlite", "runtime-tokio"] }
-strum = { version = "0.25", features = ["derive"] }
+strum = { version = "0.27.2", features = ["derive"] }
 
 [dev-dependencies]
 quickcheck = "1.0"

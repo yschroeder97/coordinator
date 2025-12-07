@@ -51,10 +51,10 @@ pub enum CatalogError {
 
     #[error("At least one of the predicates must be `Some`")]
     EmptyPredicate {},
-    
+
     #[error("Cannot connect to the database")]
     ConnectionError { reason: String },
-    
+
     #[error("Error during database migration")]
     MigrationError { details: String },
 

@@ -1,8 +1,5 @@
 use crate::catalog::query::QueryId;
 use crate::catalog::worker::GrpcAddr;
-use crate::network_service::worker_rpc_service::stop_query_request::QueryTerminationType;
-use crate::network_service::worker_rpc_service::StopQueryRequest;
-use crate::network_service::NetworkServiceError::RegisterQueryError;
 use crate::requests::Request;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -12,8 +9,11 @@ use tonic::transport::Channel;
 use tonic::Status;
 use tracing::{error, info};
 use tracing::{instrument, warn};
+use worker_rpc_service::stop_query_request::QueryTerminationType;
 use worker_rpc_service::worker_rpc_service_client::WorkerRpcServiceClient;
+use worker_rpc_service::StopQueryRequest;
 use worker_rpc_service::{RegisterQueryRequest, StartQueryRequest};
+use NetworkServiceError::RegisterQueryError;
 
 mod worker_rpc_service {
     tonic::include_proto!("worker_rpc");
