@@ -5,28 +5,50 @@ edition = "2021"
 authors = ["Yannik Schroeder <yannik.schroeder@tu-berlin.de>"]
 
 [dependencies]
-madsim = { version = "0.2", features = ["macros"] }
-tonic = { version = "0.5", package = "madsim-tonic" }
-prost = { version = "0.13.5" }
-tokio = { version = "1.0", features = ["rt-multi-thread"] }
-tracing = "0.1.41"
+madsim = { version = "0.2.34", features = ["macros", "rpc"] }
+
+tonic = { version = "0.5.1", package = "madsim-tonic" }
+prost = { version = "0.13" }
+
+tokio = { version = "0.2", package = "madsim-tokio", features = [
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "time",
+] }
+
+sqlx = { version = "0.8.2", features = ["sqlite", "runtime-tokio", "macros", "json"] }
+
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-flume = "0.11.1"
+flume = "0.12"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = "1.0.145"
 thiserror = "2.0.17"
-sqlx = { version = "0.9.0-alpha.1", features = ["sqlite", "runtime-tokio"] }
-strum = { version = "0.27.2", features = ["derive"] }
+strum = { version = "0.26", features = ["derive"] } # 0.27 might be fine, but 0.26 is safer with older sqlx
+tower = { version = "0.5", features = ["retry"] }
+futures-util = "0.3"
+
+# tokio-retry2 might conflict if not patched, let's try keeping it.
+# RisingWave patches `tokio-retry` (the original), not `tokio-retry2`.
+tokio-retry2 = { version = "0.7.0", features = ["jitter", "tracing"] }
 
 [dev-dependencies]
-quickcheck = "1.0"
-quickcheck_macros = "1.0"
+quickcheck = "1.0.3"
+quickcheck_macros = "1.1.0"
 
 [dependencies.uuid]
-version = "1.18.1"
-features = [
-    "v4",
-]
+version = "1.10"
+features = ["v4"]
+
+[patch.crates-io]
+# RisingWave's fork of SQLx (v0.8.2)
+# This fork replaces socket IO with madsim network handles.
+sqlx = { git = "https://github.com/madsim-rs/sqlx.git", rev = "3efe6d0065963db2a2b7f30dee69f647e28dec81" }
+
+# Required for UUID v4 generation to be deterministic (seeded by madsim).
+getrandom = { git = "https://github.com/madsim-rs/getrandom.git", rev = "e79a7ae" }
 
 [build-dependencies]
 tonic-build = { version = "0.5", package = "madsim-tonic-build" }

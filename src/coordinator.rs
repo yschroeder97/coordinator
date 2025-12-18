@@ -1,14 +1,17 @@
-use crate::catalog::catalog::Catalog;
-pub use crate::message_bus::{message_bus, CoordinatorHandle, CoordinatorReceiver};
-use crate::network_service::NetworkService;
-use crate::requests::{
-    CreateLogicalSourceRequest, CreatePhysicalSourceRequest, CreateQueryRequest, CreateSinkRequest,
-    CreateWorkerRequest, DropLogicalSourceRequest, DropPhysicalSourceRequest, DropQueryRequest,
-    DropSinkRequest, DropWorkerRequest, GetLogicalSourceRequest, GetPhysicalSourceRequest,
-    GetQueryRequest, GetSinkRequest, GetWorkerRequest,
+use crate::catalog::catalog_base::Catalog;
+use crate::errors::CoordinatorErr;
+use crate::catalog::query::query::{CreateQueryRequest, DropQueryRequest};
+use crate::catalog::sink::sink::{CreateSinkRequest, DropSinkRequest};
+use crate::catalog::source::logical_source::{
+    CreateLogicalSourceRequest, DropLogicalSourceRequest,
 };
-use tokio::runtime::Runtime;
-use tracing::{info_span, Instrument};
+use crate::catalog::source::physical_source::{
+    CreatePhysicalSourceRequest, DropPhysicalSourceRequest,
+};
+use crate::catalog::worker::worker::{CreateWorkerRequest, DropWorkerRequest};
+pub use crate::message_bus::{message_bus, CoordinatorHandle, CoordinatorReceiver};
+use tracing::{info, info_span, Instrument};
+use crate::catalog::catalog_errors::CatalogErr;
 
 pub enum CoordinatorRequest {
     CreateLogicalSource(CreateLogicalSourceRequest),
@@ -16,11 +19,6 @@ pub enum CoordinatorRequest {
     CreateSink(CreateSinkRequest),
     CreateQuery(CreateQueryRequest),
     CreateWorker(CreateWorkerRequest),
-    ShowLogicalSources(GetLogicalSourceRequest),
-    ShowPhysicalSources(GetPhysicalSourceRequest),
-    ShowSinks(GetSinkRequest),
-    ShowWorkers(GetWorkerRequest),
-    ShowQueries(GetQueryRequest),
     DropLogicalSource(DropLogicalSourceRequest),
     DropPhysicalSource(DropPhysicalSourceRequest),
     DropSink(DropSinkRequest),
@@ -28,6 +26,7 @@ pub enum CoordinatorRequest {
     DropWorker(DropWorkerRequest),
 }
 
+#[macro_export]
 macro_rules! impl_from {
     ($variant:ident, $type:ty, $enum:ident) => {
         impl From<$type> for $enum {
@@ -50,20 +49,6 @@ impl_from!(
 );
 impl_from!(CreateSink, CreateSinkRequest, CoordinatorRequest);
 impl_from!(CreateQuery, CreateQueryRequest, CoordinatorRequest);
-
-impl_from!(
-    ShowLogicalSources,
-    GetLogicalSourceRequest,
-    CoordinatorRequest
-);
-impl_from!(
-    ShowPhysicalSources,
-    GetPhysicalSourceRequest,
-    CoordinatorRequest
-);
-impl_from!(ShowSinks, GetSinkRequest, CoordinatorRequest);
-impl_from!(ShowWorkers, GetWorkerRequest, CoordinatorRequest);
-impl_from!(ShowQueries, GetQueryRequest, CoordinatorRequest);
 impl_from!(
     DropLogicalSource,
     DropLogicalSourceRequest,
@@ -79,11 +64,9 @@ impl_from!(DropQuery, DropQueryRequest, CoordinatorRequest);
 
 const DEFAULT_CAPACITY: usize = 16;
 
-pub fn start_coordinator(
-    batch_size: Option<usize>,
-    cluster: NetworkService,
-    catalog: Catalog,
-) -> CoordinatorHandle<CoordinatorRequest> {
+#[cfg(not(madsim))]
+pub fn start_coordinator(batch_size: Option<usize>) -> CoordinatorHandle<CoordinatorRequest> {
+    info!("Starting");
     let (handle, receiver) =
         message_bus::<CoordinatorRequest>(batch_size.unwrap_or(DEFAULT_CAPACITY));
 
@@ -94,8 +77,21 @@ pub fn start_coordinator(
             .build()
             .expect("Failed to create Tokio Runtime");
 
+        let catalog = rt
+            .block_on(Catalog::from_env())
+            .expect("Failed to create Catalogs");
+
+        let worker_catalog = catalog.worker_catalog();
+        // rt.spawn(
+        //     async move {
+        //         let mut cluster_service = ClusterService::new(worker_catalog);
+        //         cluster_service.run().await
+        //     }
+        //     .instrument(info_span!("network_service")),
+        // );
+
         rt.block_on(
-            async move { RequestListener::new(receiver, cluster, catalog).run().await }
+            async move { RequestListener::new(receiver, catalog).run().await }
                 .instrument(info_span!("request_listener")),
         );
         rt.shutdown_background();
@@ -104,112 +100,136 @@ pub fn start_coordinator(
     handle
 }
 
+pub async fn start_test_coordinator() -> CoordinatorHandle<CoordinatorRequest> {
+    info!("Starting");
+    let (handle, receiver) = message_bus::<CoordinatorRequest>(DEFAULT_CAPACITY);
+
+    let catalog = Catalog::from_env().await.expect("Failed to create Catalog");
+
+    let worker_catalog = catalog.worker_catalog();
+    // tokio::spawn(async move {
+    //     let mut cluster_service = ClusterService::new(worker_catalog);
+    //     cluster_service
+    //         .run()
+    //         .await
+    //         .instrument(info_span!("cluster_service"))
+    // });
+
+    info!("Spawning RequestListener");
+    tokio::spawn(
+        async move {
+            info!("RequestListener task started");
+            RequestListener::new(receiver, catalog).run().await
+        }
+        .instrument(info_span!("request_listener")),
+    );
+
+    handle
+}
+
 struct RequestListener {
     receiver: CoordinatorReceiver<CoordinatorRequest>,
-    cluster: NetworkService,
     catalog: Catalog,
 }
 
 impl RequestListener {
-    pub(crate) fn new(
-        receiver: CoordinatorReceiver<CoordinatorRequest>,
-        cluster: NetworkService,
-        catalog: Catalog,
-    ) -> RequestListener {
-        Self {
-            receiver,
-            cluster,
-            catalog,
-        }
+    fn new(receiver: CoordinatorReceiver<CoordinatorRequest>, catalog: Catalog) -> RequestListener {
+        Self { receiver, catalog }
     }
 
-    pub(crate) async fn run(mut self) -> () {
+    async fn run(mut self) -> () {
         while let Some(msg) = self.receiver.recv() {
             match msg {
                 CoordinatorRequest::CreateLogicalSource(req) => {
                     let _ = req.respond(
                         self.catalog
+                            .source
                             .create_logical_source(&req.payload)
                             .await
-                            .map_err(Into::into),
+                            .map_err(|e| CoordinatorErr::from(CatalogErr::from(e))),
                     );
                 }
                 CoordinatorRequest::CreatePhysicalSource(req) => {
                     let _ = req.respond(
                         self.catalog
+                            .source
                             .create_physical_source(&req.payload)
                             .await
-                            .map_err(Into::into),
+                            .map_err(|e| CoordinatorErr::from(CatalogErr::from(e))),
                     );
                 }
                 CoordinatorRequest::CreateSink(req) => {
                     let _ = req.respond(
                         self.catalog
+                            .sink
                             .create_sink(&req.payload)
                             .await
-                            .map_err(Into::into),
+                            .map_err(|e| CoordinatorErr::from(CatalogErr::from(e))),
                     );
                 }
                 CoordinatorRequest::CreateQuery(req) => {
                     let _ = req.respond(
                         self.catalog
+                            .query
                             .create_query(&req.payload)
                             .await
-                            .map_err(Into::into),
+                            .map_err(|e| CoordinatorErr::from(CatalogErr::from(e))),
                     );
                 }
                 CoordinatorRequest::CreateWorker(req) => {
                     let _ = req.respond(
                         self.catalog
+                            .worker
                             .create_worker(&req.payload)
                             .await
-                            .map_err(Into::into),
+                            .map_err(|e| CoordinatorErr::from(CatalogErr::from(e))),
                     );
                 }
-                CoordinatorRequest::ShowLogicalSources(_show_logical) => {}
-                CoordinatorRequest::ShowPhysicalSources(_show_physical) => {}
-                CoordinatorRequest::ShowSinks(_show_sinks) => {}
-                CoordinatorRequest::ShowWorkers(_show_workers) => {}
-                CoordinatorRequest::ShowQueries(_show_queries) => {}
                 CoordinatorRequest::DropLogicalSource(req) => {
-                    let _ = req.respond(
-                        self.catalog
-                            .drop_logical_source(&req.payload)
-                            .await
-                            .map_err(Into::into),
-                    );
+                    // let _ = req.respond(
+                    //     self.catalog
+                    //         .source
+                    //         .drop_logical_source(&req.payload)
+                    //         .await
+                    //         .map_err(|e| CoordinatorErr::from(CatalogErr::from(e))),
+                    // );
                 }
                 CoordinatorRequest::DropPhysicalSource(req) => {
                     let _ = req.respond(
                         self.catalog
+                            .source
                             .drop_physical_source(&req.payload)
                             .await
-                            .map_err(Into::into),
+                            .map_err(|e| CoordinatorErr::from(CatalogErr::from(e))),
                     );
                 }
                 CoordinatorRequest::DropSink(req) => {
                     let _ = req.respond(
                         self.catalog
+                            .sink
                             .drop_sink(&req.payload)
                             .await
-                            .map_err(Into::into),
+                            .map_err(|e| CoordinatorErr::from(CatalogErr::from(e))),
                     );
                 }
                 CoordinatorRequest::DropQuery(req) => {
-                    let _ = req.respond(
-                        self.catalog
-                            .drop_query(&req.payload)
-                            .await
-                            .map_err(Into::into),
-                    );
+                    // let _ = req.respond(
+                    //     self.catalog
+                    //         .query
+                    //         .mark_query_for_deletion(&req.payload)
+                    //         .await
+                    //         .map_err(|e| CoordinatorErr::from(CatalogErr::from(e))),
+                    // );
                 }
                 CoordinatorRequest::DropWorker(req) => {
-                    let _ = req.respond(
-                        self.catalog
-                            .drop_worker(&req.payload)
-                            .await
-                            .map_err(Into::into),
-                    );
+                    // let _ = req.respond(
+                    //     self.catalog
+                    //         .worker
+                    //         .mark_workers_for_deletion(&req.payload)
+                    //         .await
+                    //         .map(|count| count)
+                    //         .map_err(|e| CoordinatorErr::from(CatalogErr::from(e))),
+                    // );
                 }
             }
         }

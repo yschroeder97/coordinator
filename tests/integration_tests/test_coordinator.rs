@@ -1,52 +1,72 @@
 #![cfg(madsim)]
 use crate::worker::worker_rpc_service::worker_rpc_service_server::WorkerRpcServiceServer;
 use crate::worker::SingleNodeWorker;
-use madsim::{
-    net::NetSim,
-    rand::{thread_rng, Rng},
-    runtime::Handle,
-    time::sleep,
-};
-use std::{
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
+use coordinator::coordinator::start_test_coordinator;
+use coordinator::coordinator::CoordinatorRequest;
+use coordinator::errors::CoordinatorErr;
+use coordinator::request::{CreateWorker, CreateWorkerRequest, DropWorkerRequest, WorkerQuery};
+
+use madsim::runtime::Handle;
+use madsim::time::Duration;
+use std::net::SocketAddr;
 use tonic::transport::Server;
+use tracing::info;
+
+type FragmentId = u64;
 
 #[madsim::test]
-async fn basic() {
-    tracing_subscriber::fmt::init();
+async fn simple() {
+    std::env::set_var("DATABASE_URL", "sqlite::memory:");
+
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_test_writer()
+        .without_time()
+        .init();
 
     let handle = Handle::current();
-    let addr0 = "10.0.0.1:50051".parse::<SocketAddr>().unwrap();
-    let ip1 = "10.0.0.2".parse().unwrap();
-    let ip2 = "10.0.0.3".parse().unwrap();
-    let node0 = handle.create_node().name("worker").ip(addr0.ip()).build();
-    let node1 = handle.create_node().name("coordinator").ip(ip1).build();
 
-    NetSim::current().add_dns_record("worker", addr0.ip());
+    let worker_addr: SocketAddr = "10.0.0.1:8080".parse().unwrap();
+    let worker_node = handle
+        .create_node()
+        .name("worker")
+        .ip(worker_addr.ip())
+        .build();
 
-    node0.spawn(async move {
-        Server::builder()
-            .add_service(WorkerRpcServiceServer::new(SingleNodeWorker::default()))
-            .serve(addr0)
-            .await
+    let _ = worker_node.spawn(async move {
+        let worker = SingleNodeWorker::default();
+        let svc = WorkerRpcServiceServer::new(worker);
+
+        info!("Starting worker server on {}", worker_addr);
+
+        Server::builder().add_service(svc).serve(worker_addr).await;
+    });
+
+    let coordinator_node = handle
+        .create_node()
+        .name("coordinator")
+        .ip("10.0.0.2".parse().unwrap())
+        .build();
+
+    let (tx_create, rx_create) = flume::bounded::<Result<(), CoordinatorErr>>(1);
+
+    let _ = coordinator_node.spawn(async move {
+        let sender = start_test_coordinator().await;
+
+        sender
+            .send(CoordinatorRequest::CreateWorker(CreateWorkerRequest {
+                payload: CreateWorker {
+                    host_name: "10.0.0.1".to_string(),
+                    grpc_port: 8080,
+                    data_port: 9090,
+                    capacity: 1,
+                    peers: vec![],
+                },
+                respond_to: tx_create,
+            }))
             .unwrap();
     });
 
-    // unary
-    let task1 = node1.spawn(async move {
-        sleep(Duration::from_secs(1)).await;
-        let mut client = GreeterClient::connect("http://worker:50051").await.unwrap();
-        let response = client.say_hello(request()).await.unwrap();
-        assert_eq!(response.into_inner().message, "Hello Tonic! (10.0.0.2)");
-
-        let request = tonic::Request::new(HelloRequest {
-            name: "error".into(),
-        });
-        let response = client.say_hello(request).await.unwrap_err();
-        assert_eq!(response.code(), tonic::Code::InvalidArgument);
-    });
-
-    task1.await.unwrap();
+    let response_create = rx_create.recv_async().await.unwrap();
+    info!("CreateWorkerResponse: {:?}", response_create);
 }

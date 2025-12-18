@@ -1,50 +1,29 @@
-use crate::catalog::logical_source::LogicalSourceName;
-use crate::catalog::query::QueryId;
-use crate::catalog::sink::SinkName;
-use crate::catalog::worker::HostName;
+use crate::catalog::database::DatabaseErr;
+use crate::catalog::query::query_catalog::QueryCatalogError;
+use crate::catalog::sink::sink_catalog::SinkCatalogError;
+use crate::catalog::source::source_catalog::SourceCatalogErr;
+use crate::catalog::worker::worker_catalog::WorkerCatalogError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum CatalogError {
-    // Worker-related errors
-    #[error("Worker with host name '{host_name}' already exists")]
-    WorkerAlreadyExists { host_name: HostName },
-    #[error("Invalid worker config: {reason}")]
-    InvalidWorkerConfig { reason: String },
+pub enum CatalogErr {
+    #[error("Source catalog error: {0}")]
+    Source(#[from] SourceCatalogErr),
 
-    // Logical Source errors
-    #[error("Logical source with name '{name}' already exists")]
-    LogicalSourceAlreadyExists { name: LogicalSourceName },
-    #[error("Logical source is referenced by physical sources")]
-    LogicalSourceReferencedByPhysical { name: LogicalSourceName },
-    #[error("Invalid schema for logical source '{name}': {reason}")]
-    InvalidSchema {
-        name: LogicalSourceName,
-        reason: String,
-    },
+    #[error("Worker catalog error: {0}")]
+    Worker(#[from] WorkerCatalogError),
 
-    // Physical Source errors
-    #[error("Cannot create physical source: logical source '{logical_source_name}' not found")]
-    LogicalSourceNotFoundForPhysical {
-        logical_source_name: LogicalSourceName,
-    },
-    #[error("Worker '{host_name}' not found for physical source")]
-    WorkerNotFoundForPhysical { host_name: HostName },
+    #[error("Query catalog error: {0}")]
+    Query(#[from] QueryCatalogError),
 
-    // Query errors
-    #[error("Query with id '{id}' already exists")]
-    QueryAlreadyExists { id: QueryId },
-    #[error("Sink with name {sink_name} not found for query {query_id} already exists")]
-    SinkNotFoundForQuery {
-        sink_name: SinkName,
-        query_id: QueryId,
-    },
+    #[error("Sink catalog error: {0}")]
+    Sink(#[from] SinkCatalogError),
 
-    // Sink errors
-    #[error("Sink with name {name} already exists")]
-    SinkAlreadyExists { name: SinkName },
-    #[error("Cannot create sink: worker '{host_name}' not found")]
-    WorkerNotFoundForSink { host_name: HostName },
+    #[error("Database error: {0}")]
+    Database(#[from] DatabaseErr),
+
+    #[error("Legacy database error: {0}")]
+    LegacyDatabase(#[from] sqlx::Error),
 
     #[error("Catalog not-null violation")]
     NotNullViolation {},
@@ -58,11 +37,7 @@ pub enum CatalogError {
     #[error("Error during database migration")]
     MigrationError { details: String },
 
-    // Database-specific errors
-    #[error("Database error: {0}")]
-    Database(#[from] sqlx::Error),
-
-    #[error("Invariant 'invariant' was broken")]
+    #[error("Invariant '{invariant}' was broken")]
     BrokenInvariant { invariant: String },
 
     // Catch-all for unexpected catalog errors

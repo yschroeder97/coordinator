@@ -3,7 +3,6 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::{Request, Response, Status};
 use tracing::{error, info, instrument};
-use uuid::Uuid;
 
 use worker_rpc_service::worker_rpc_service_server::WorkerRpcService;
 use worker_rpc_service::worker_status_response::{ActiveQuery, TerminatedQuery};
@@ -12,7 +11,7 @@ use worker_rpc_service::{
     RegisterQueryRequest, StartQueryRequest, StopQueryRequest, UnregisterQueryRequest,
     WorkerStatusRequest, WorkerStatusResponse,
 };
-type QueryId = String;
+type FragmentId = u64;
 
 #[derive(Default, Clone, PartialEq)]
 enum QueryFragmentState {
@@ -48,7 +47,7 @@ struct Query {
 
 #[derive(Default)]
 pub struct SingleNodeWorker {
-    queries: Arc<RwLock<HashMap<QueryId, Query>>>,
+    fragments: Arc<RwLock<HashMap<FragmentId, Query>>>,
 }
 
 impl SingleNodeWorker {
@@ -59,26 +58,26 @@ impl SingleNodeWorker {
             .as_millis() as u64
     }
 
-    fn query_not_found_error(query_id: &str) -> Status {
+    fn query_not_found_error(query_id: u64) -> Status {
         error!("Unknown query with id {}", query_id);
         Status::internal(format!("Unknown query with id {}", query_id))
     }
 
-    fn with_query_mut<F, R>(&self, query_id: &str, f: F) -> Result<R, Status>
+    fn with_query_mut<F, R>(&self, query_id: u64, f: F) -> Result<R, Status>
     where
         F: FnOnce(&mut Query) -> R,
     {
-        match self.queries.write().unwrap().get_mut(query_id) {
+        match self.fragments.write().unwrap().get_mut(&query_id) {
             Some(query) => Ok(f(query)),
             None => Err(Self::query_not_found_error(query_id)),
         }
     }
 
-    fn with_query<F, R>(&self, query_id: &str, f: F) -> Result<R, Status>
+    fn with_query<F, R>(&self, query_id: u64, f: F) -> Result<R, Status>
     where
         F: FnOnce(&Query) -> R,
     {
-        match self.queries.read().unwrap().get(query_id) {
+        match self.fragments.read().unwrap().get(&query_id) {
             Some(query) => Ok(f(query)),
             None => Err(Self::query_not_found_error(query_id)),
         }
@@ -87,22 +86,17 @@ impl SingleNodeWorker {
 
 #[tonic::async_trait]
 impl WorkerRpcService for SingleNodeWorker {
-    #[instrument(skip(self, _request))]
+    #[instrument(skip(self, request))]
     async fn register_query(
         &self,
-        _request: Request<RegisterQueryRequest>,
+        request: Request<RegisterQueryRequest>,
     ) -> Result<Response<RegisterQueryReply>, Status> {
-        let id = Uuid::new_v4();
-        let id_string = id.to_string();
-        self.queries
-            .write()
-            .unwrap()
-            .insert(id_string.clone(), Query::default());
+        let id = request.get_ref().query_id;
 
-        info!("Registered new query: {}", id_string);
-        Ok(Response::new(RegisterQueryReply {
-            query_id: id_string,
-        }))
+        self.fragments.write().unwrap().insert(id, Query::default());
+
+        info!("Registered new query: {}", id);
+        Ok(Response::new(RegisterQueryReply {}))
     }
 
     #[instrument(skip(self), fields(query_id = %request.get_ref().query_id))]
@@ -110,8 +104,8 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<UnregisterQueryRequest>,
     ) -> Result<Response<()>, Status> {
-        let query_id = &request.get_ref().query_id;
-        match self.queries.write().unwrap().remove(query_id) {
+        let query_id = request.get_ref().query_id;
+        match self.fragments.write().unwrap().remove(&query_id) {
             Some(_) => {
                 info!("Unregistered query");
                 Ok(Response::new(()))
@@ -125,7 +119,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<StartQueryRequest>,
     ) -> Result<Response<()>, Status> {
-        let query_id = &request.get_ref().query_id;
+        let query_id = request.get_ref().query_id;
         self.with_query_mut(query_id, |query| {
             query.state = QueryFragmentState::Running;
             query.started = Self::current_timestamp_ms();
@@ -136,7 +130,7 @@ impl WorkerRpcService for SingleNodeWorker {
 
     #[instrument(skip(self), fields(query_id = %request.get_ref().query_id))]
     async fn stop_query(&self, request: Request<StopQueryRequest>) -> Result<Response<()>, Status> {
-        let query_id = &request.get_ref().query_id;
+        let query_id = request.get_ref().query_id;
         self.with_query_mut(query_id, |query| {
             query.state = QueryFragmentState::Stopped;
             query.terminated = Self::current_timestamp_ms();
@@ -150,7 +144,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<QueryStatusRequest>,
     ) -> Result<Response<QueryStatusReply>, Status> {
-        let query_id = &request.get_ref().query_id;
+        let query_id = request.get_ref().query_id;
         let reply = self.with_query(query_id, |query| QueryStatusReply {
             query_id: query_id.clone(),
             state: query.state.clone().into(),
@@ -172,7 +166,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<WorkerStatusRequest>,
     ) -> Result<Response<WorkerStatusResponse>, Status> {
-        let queries = self.queries.read().unwrap();
+        let queries = self.fragments.read().unwrap();
         let (terminated, active): (Vec<_>, Vec<_>) = queries.iter().partition(|(_, query)| {
             query.state == QueryFragmentState::Failed || query.state == QueryFragmentState::Stopped
         });

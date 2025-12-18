@@ -20,5 +20,7 @@ VALUES ('Pending'),
 
 
 INSERT INTO worker_states (state)
-VALUES ('Active'),
-       ('Unreachable');
+VALUES ('Pending'),
+       ('Active'),
+       ('Unreachable'),
+       ('Removed');

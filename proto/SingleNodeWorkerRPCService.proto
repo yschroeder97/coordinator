@@ -15,70 +15,70 @@ service WorkerRPCService {
 }
 
 message RegisterQueryRequest {
+  uint64 queryId = 1;
 }
 
 message RegisterQueryReply {
-  string queryId = 1;
 }
 
 message UnregisterQueryRequest {
-  string queryId = 1;
+  uint64 queryId = 1;
 }
 
 message StartQueryRequest {
-  string queryId = 1;
+  uint64 queryId = 1;
 }
 
 message StopQueryRequest {
-    enum QueryTerminationType {Graceful = 0; HardStop = 1; Failure = 2; Invalid = 3;};
-    string queryId = 2;
-    QueryTerminationType terminationType = 3;
+  enum QueryTerminationType {Graceful = 0; HardStop = 1; Failure = 2; Invalid = 3;};
+  uint64 queryId = 2;
+  QueryTerminationType terminationType = 3;
 }
 
 enum QueryState {
-    Registered = 0;
-    Started = 1;
-    Running = 2;
-    Stopped = 3;
-    Failed = 4;
+  Registered = 0;
+  Started = 1;
+  Running = 2;
+  Stopped = 3;
+  Failed = 4;
 }
 
 message Error {
-    uint64 code = 1;
-    string message = 2;
-    string stackTrace = 3; /// currently untyped
-    string location = 4; /// currently untyped
+  uint64 code = 1;
+  string message = 2;
+  string stackTrace = 3; /// currently untyped
+  string location = 4; /// currently untyped
 }
 
 message QueryStatusRequest {
-  string queryId = 1;
+  uint64 queryId = 1;
 }
 
 message QueryMetrics {
-   optional uint64 startUnixTimeInMs = 1;
-   optional uint64 runningUnixTimeInMs = 2;
-   optional uint64 stopUnixTimeInMs = 3;
-   optional Error error = 4;
+  optional uint64 startUnixTimeInMs = 1;
+  optional uint64 runningUnixTimeInMs = 2;
+  optional uint64 stopUnixTimeInMs = 3;
+  optional Error error = 4;
 }
 
 message QueryStatusReply {
-    string queryId = 1;
-    QueryState state = 2;
-    QueryMetrics metrics = 3;
+  uint64 queryId = 1;
+  QueryState state = 2;
+  QueryMetrics metrics = 3;
 }
 
 message QueryLogRequest {
-    string queryId = 1;
+  uint64 queryId = 1;
 }
 
 message QueryLogEntry {
-    QueryState state = 1;
-    uint64 unixTimeInMs = 2;
-    optional Error error = 3;
+  QueryState state = 1;
+  uint64 unixTimeInMs = 2;
+  optional Error error = 3;
 }
 
 message QueryLogReply {
-    repeated QueryLogEntry entries = 1;
+  repeated QueryLogEntry entries = 1;
 }
 
 message WorkerStatusRequest {
@@ -87,12 +87,12 @@ message WorkerStatusRequest {
 
 message WorkerStatusResponse {
   message ActiveQuery {
-    string queryId = 1;
+    uint64 queryId = 1;
     uint64 startedUnixTimestampInMs = 2;
   }
 
   message TerminatedQuery {
-    string queryId = 1;
+    uint64 queryId = 1;
     uint64 startedUnixTimestampInMs = 2;
     uint64 terminatedUnixTimestampInMs = 3;
     optional Error error = 4;

@@ -1,13 +1,16 @@
 CREATE TABLE IF NOT EXISTS workers
 (
-    host_name TEXT             DEFAULT '127.0.0.1',
-    grpc_port INTEGER NOT NULL DEFAULT 50051 CHECK (grpc_port BETWEEN 1 AND 65535),
-    data_port INTEGER NOT NULL DEFAULT 9090 CHECK (data_port BETWEEN 1 AND 65535),
-    capacity  INTEGER NOT NULL CHECK (capacity >= 0),
-    state     TEXT    NOT NULL DEFAULT 'Active',
+    host_name     TEXT    NOT NULL DEFAULT '127.0.0.1',
+    grpc_port     INTEGER NOT NULL DEFAULT 50051 CHECK (grpc_port BETWEEN 1 AND 65535),
+    data_port     INTEGER NOT NULL DEFAULT 9090 CHECK (data_port BETWEEN 1 AND 65535),
+    capacity      INTEGER NOT NULL CHECK (capacity >= 0),
+    current_state TEXT    NOT NULL DEFAULT 'Pending',
+    desired_state TEXT    NOT NULL DEFAULT 'Active',
     PRIMARY KEY (host_name, grpc_port),
-    FOREIGN KEY (state) REFERENCES worker_states (state),
-    CHECK (grpc_port != data_port)
+    FOREIGN KEY (current_state) REFERENCES worker_states (state),
+    FOREIGN KEY (desired_state) REFERENCES worker_states (state),
+    CHECK (grpc_port != data_port),
+    CHECK (desired_state IN ('Active', 'Removed'))
 );
 
 CREATE TABLE IF NOT EXISTS worker_states
@@ -61,12 +64,27 @@ CREATE TABLE IF NOT EXISTS query_states
 
 CREATE TABLE IF NOT EXISTS queries
 (
-    id            TEXT PRIMARY KEY,
-    statement     TEXT NOT NULL,
-    current_state TEXT NOT NULL DEFAULT 'Pending',
-    desired_state TEXT NOT NULL DEFAULT 'Running',
+    id                   TEXT PRIMARY KEY,
+    statement            TEXT     NOT NULL,
+    current_state        TEXT     NOT NULL DEFAULT 'Pending',
+    desired_state        TEXT     NOT NULL DEFAULT 'Running',
+    submission_timestamp DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY (current_state) REFERENCES query_states (state),
-    FOREIGN KEY (desired_state) REFERENCES query_states (state)
+    FOREIGN KEY (desired_state) REFERENCES query_states (state),
+    CHECK (desired_state IN ('Running', 'Stopped'))
+);
+
+CREATE TABLE IF NOT EXISTS query_log
+(
+    id                    TEXT PRIMARY KEY,
+    statement             TEXT     NOT NULL,
+    termination_state     TEXT     NOT NULL DEFAULT 'Completed',
+    submission_timestamp  DATETIME NOT NULL,
+    termination_timestamp DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
+    error                 TEXT DEFAULT NULL,
+    FOREIGN KEY (termination_state) REFERENCES query_states (state),
+    CHECK (termination_state IN ('Completed', 'Stopped', 'Failed')),
+    CHECK (submission_timestamp < termination_timestamp)
 );
 
 CREATE TABLE IF NOT EXISTS deployed_sources
@@ -74,7 +92,7 @@ CREATE TABLE IF NOT EXISTS deployed_sources
     query_id           TEXT    NOT NULL,
     physical_source_id INTEGER NOT NULL,
     PRIMARY KEY (query_id, physical_source_id),
-    FOREIGN KEY (query_id) REFERENCES queries (id),
+    FOREIGN KEY (query_id) REFERENCES queries (id) ON DELETE CASCADE,
     FOREIGN KEY (physical_source_id) REFERENCES physical_sources (id) ON DELETE RESTRICT
 );
 
@@ -95,7 +113,8 @@ CREATE TABLE IF NOT EXISTS query_fragments
     FOREIGN KEY (query_id) REFERENCES queries (id) ON DELETE RESTRICT,
     FOREIGN KEY (host_name, grpc_port) REFERENCES workers (host_name, grpc_port) ON DELETE RESTRICT,
     FOREIGN KEY (current_state) REFERENCES query_fragment_states (state),
-    FOREIGN KEY (desired_state) REFERENCES query_fragment_states (state)
+    FOREIGN KEY (desired_state) REFERENCES query_fragment_states (state),
+    CHECK (desired_state IN ('Running', 'Stopped'))
 );
 
 CREATE TABLE IF NOT EXISTS deployed_sinks
