@@ -1,3 +1,6 @@
+use crate::catalog::query_builder::ToSql;
+use crate::catalog::notification::Notifier;
+use tokio::sync::watch;
 use super::query::{CreateQuery, DropQuery, GetQuery, Query, QueryId, QueryState};
 use crate::catalog::database::{Database, DatabaseErr};
 use crate::catalog::sink::sink::SinkName;
@@ -30,11 +33,30 @@ pub enum QueryCatalogError {
 
 pub struct QueryCatalog {
     db: Arc<Database>,
+    notifier_tx: watch::Sender<()>,
+    notifier_rx: watch::Receiver<()>,
+}
+
+impl Notifier for QueryCatalog {
+    type Notification = ();
+
+    fn subscribe(&self) -> watch::Receiver<()> {
+        self.notifier_rx.clone()
+    }
+
+    fn notify(&self) {
+        let _ = self.notifier_tx.send(());
+    }
 }
 
 impl QueryCatalog {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        let (notifier_tx, notifier_rx) = watch::channel(());
+        Self {
+            db,
+            notifier_tx,
+            notifier_rx,
+        }
     }
 
     pub async fn create_query(&self, query: &CreateQuery) -> Result<(), QueryCatalogError> {
@@ -43,22 +65,18 @@ impl QueryCatalog {
             query.name,
             query.stmt
         );
-
-        self.db.insert(query_sql).await?;
+        self.db.execute(query_sql).await?;
+        self.notify();
         Ok(())
-    }
-
-    pub async fn mark_query_for_deletion(
-        &self,
-        drop_request: &DropQuery,
-    ) -> Result<(), QueryCatalogError> {
-        todo!()
     }
 
     pub async fn drop_query(
         &self,
-        drop_request: &DropQuery,
-    ) -> Result<Vec<Query>, QueryCatalogError> {
-        todo!()
+        drop_req: &DropQuery,
+    ) -> Result<(), QueryCatalogError> {
+        let (sql, args) = drop_req.to_sql();
+        self.db.update(&sql, args).await?;
+        self.notify();
+        Ok(())
     }
 }

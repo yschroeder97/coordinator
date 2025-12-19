@@ -1,10 +1,14 @@
+use crate::catalog::tables::queries;
+use crate::catalog::tables::table;
+use crate::catalog::query_builder::{ToSql, UpdateBuilder};
 use crate::catalog::worker::worker_endpoint::{HostName, NetworkAddr};
 use crate::errors::CoordinatorErr;
 use crate::request::Request;
+use sqlx::sqlite::SqliteArguments;
 use strum::Display;
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, sqlx::Type, Display)]
 pub enum StopMode {
     Graceful,
     Forceful,
@@ -19,7 +23,7 @@ impl From<StopMode> for i32 {
     }
 }
 
-#[derive(Clone, Debug, sqlx::Type, Display)]
+#[derive(Clone, Copy, Debug, sqlx::Type, Display)]
 pub enum QueryState {
     Pending,     // Query was (partially) submitted/started
     Deploying,   // Query is in the deployment process
@@ -90,11 +94,25 @@ impl CreateQuery {
 #[derive(Clone, Debug)]
 pub struct DropQuery {
     pub with_id: Option<QueryId>,
-    pub with_state: Option<QueryState>,
+    pub with_current_state: Option<QueryState>,
+    pub with_desired_state: Option<QueryState>,
     pub on_worker: Option<NetworkAddr>,
     pub stop_mode: Option<StopMode>,
 }
-pub type DropQueryRequest = Request<DropQuery, Result<Vec<Query>, CoordinatorErr>>;
+pub type DropQueryRequest = Request<DropQuery, Result<(), CoordinatorErr>>;
+
+impl ToSql for DropQuery {
+    fn to_sql(&self) -> (String, SqliteArguments<'_>) {
+        UpdateBuilder::on_table(table::QUERIES)
+            .set(queries::DESIRED_STATE, QueryState::Stopped)
+            .add_where()
+            .eq(queries::ID, self.with_id.clone())
+            .eq(queries::CURRENT_STATE, self.with_current_state)
+            .eq(queries::DESIRED_STATE, self.with_desired_state)
+            .eq(queries::STOP_MODE, self.stop_mode)
+            .into_parts()
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct GetQuery {

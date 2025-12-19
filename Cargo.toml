@@ -26,12 +26,12 @@ flume = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.145"
 thiserror = "2.0.17"
-strum = { version = "0.26", features = ["derive"] } # 0.27 might be fine, but 0.26 is safer with older sqlx
+strum = { version = "0.26.3", features = ["derive"] }
 tower = { version = "0.5", features = ["retry"] }
 futures-util = "0.3"
 
 # tokio-retry2 might conflict if not patched, let's try keeping it.
-# RisingWave patches `tokio-retry` (the original), not `tokio-retry2`.
+# RisingWave patches `tokio-retry`, not `tokio-retry2`.
 tokio-retry2 = { version = "0.7.0", features = ["jitter", "tracing"] }
 
 [dev-dependencies]

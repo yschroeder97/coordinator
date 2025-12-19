@@ -61,7 +61,7 @@ pub type DropPhysicalSourceRequest =
     Request<DropPhysicalSource, Result<Vec<PhysicalSource>, CoordinatorErr>>;
 
 impl ToSql for DropPhysicalSource {
-    fn to_sql(&self) -> (String, SqliteArguments) {
+    fn to_sql(&self) -> (String, SqliteArguments<'_>) {
         WhereBuilder::from(SqlOperation::Delete(table::PHYSICAL_SOURCES))
             .eq(
                 physical_sources::LOGICAL_SOURCE,
@@ -69,11 +69,11 @@ impl ToSql for DropPhysicalSource {
             )
             .eq(
                 physical_sources::PLACEMENT_HOST_NAME,
-                self.on_worker.clone().and_then(|worker| Some(worker.host)),
+                self.on_worker.clone().map(|worker| worker.host),
             )
             .eq(
                 physical_sources::PLACEMENT_GRPC_PORT,
-                self.on_worker.clone().and_then(|worker| Some(worker.port)),
+                self.on_worker.clone().map(|worker| worker.port),
             )
             .eq(physical_sources::SOURCE_TYPE, self.with_type)
             .into_parts()

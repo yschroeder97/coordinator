@@ -62,16 +62,23 @@ CREATE TABLE IF NOT EXISTS query_states
     state TEXT PRIMARY KEY NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS query_stop_modes
+(
+    mode TEXT PRIMARY KEY NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS queries
 (
     id                   TEXT PRIMARY KEY,
     statement            TEXT     NOT NULL,
     current_state        TEXT     NOT NULL DEFAULT 'Pending',
     desired_state        TEXT     NOT NULL DEFAULT 'Running',
+    stop_mode            TEXT              DEFAULT NULL,
     submission_timestamp DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY (current_state) REFERENCES query_states (state),
     FOREIGN KEY (desired_state) REFERENCES query_states (state),
-    CHECK (desired_state IN ('Running', 'Stopped'))
+    CHECK (desired_state IN ('Running', 'Stopped')),
+    CHECK (stop_mode IN (NULL, 'Graceful', 'Forceful'))
 );
 
 CREATE TABLE IF NOT EXISTS query_log
@@ -81,7 +88,7 @@ CREATE TABLE IF NOT EXISTS query_log
     termination_state     TEXT     NOT NULL DEFAULT 'Completed',
     submission_timestamp  DATETIME NOT NULL,
     termination_timestamp DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
-    error                 TEXT DEFAULT NULL,
+    error                 TEXT              DEFAULT NULL,
     FOREIGN KEY (termination_state) REFERENCES query_states (state),
     CHECK (termination_state IN ('Completed', 'Stopped', 'Failed')),
     CHECK (submission_timestamp < termination_timestamp)

@@ -6,12 +6,11 @@ use std::fmt::{Display, Formatter};
 use strum::EnumIter;
 
 pub trait ToSql {
-    fn to_sql(&self) -> (String, SqliteArguments);
+    fn to_sql(&self) -> (String, SqliteArguments<'_>);
 }
 
 #[derive(Clone, Copy, EnumIter)]
 pub enum SqlOperation {
-    Insert(&'static str),
     Select(&'static str),
     Delete(&'static str),
     Update(&'static str),
@@ -20,7 +19,6 @@ pub enum SqlOperation {
 impl Display for SqlOperation {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            SqlOperation::Insert(tbl) => write!(f, "INSERT INTO {tbl} VALUES"),
             SqlOperation::Select(tbl) => write!(f, "SELECT FROM {tbl}"),
             SqlOperation::Delete(tbl) => write!(f, "DELETE FROM {tbl}"),
             SqlOperation::Update(tbl) => write!(f, "UPDATE {tbl} SET"),
@@ -231,17 +229,15 @@ impl WhereBuilder {
 pub struct UpdateBuilder {
     builder: SqliteQueryBuilder,
     first_set: bool,
-    in_where_clause: bool,
 }
 
 impl UpdateBuilder {
     /// Starts a new UPDATE query: "UPDATE <table> SET"
-    pub fn from(table: &str) -> Self {
-        let builder = SqliteQueryBuilder::new(format!("UPDATE {} SET", table));
+    pub fn on_table(tbl: &'static str) -> Self {
+        let builder = SqliteQueryBuilder::new(SqlOperation::Update(tbl).to_string());
         Self {
             builder,
             first_set: true,
-            in_where_clause: false,
         }
     }
 
@@ -250,51 +246,13 @@ impl UpdateBuilder {
     where
         T: 'static + Type<Sqlite> + Encode<'static, Sqlite> + Send,
     {
-        if self.in_where_clause {
-            panic!("Cannot call .set() after starting the WHERE clause");
-        }
-
-        // Handle the comma separation
         if !self.first_set {
-            self.builder.push(", ");
+            self.builder.push(",");
         }
         self.first_set = false;
 
-        // Append " col = ?"
         self.builder.push(format!(" {} =", col));
         self.builder.push_bind(value);
-
-        self
-    }
-
-    /// Helper: Only sets the field if the Option is Some(value).
-    /// Useful for PATCH endpoints where None means "do not change".
-    pub fn set_if_some<T>(self, col: &str, value: Option<T>) -> Self
-    where
-        T: 'static + Type<Sqlite> + Encode<'static, Sqlite> + Send,
-    {
-        if let Some(v) = value {
-            self.set(col, v)
-        } else {
-            self
-        }
-    }
-
-    /// Starts or continues the WHERE clause.
-    pub fn filter<T>(mut self, col: &str, value: T) -> Self
-    where
-        T: 'static + Type<Sqlite> + Encode<'static, Sqlite> + Send,
-    {
-        if !self.in_where_clause {
-            self.builder.push(" WHERE");
-            self.in_where_clause = true;
-        } else {
-            self.builder.push(" AND");
-        }
-
-        self.builder.push(format!(" {} =", col));
-        self.builder.push_bind(value);
-
         self
     }
 
@@ -305,11 +263,19 @@ impl UpdateBuilder {
         }
         self.builder.into_parts()
     }
+
+    /// Hands off to the `WhereBuilder` to add `WHERE` clauses to the update query
+    pub fn add_where(self) -> WhereBuilder {
+        if self.first_set {
+            panic!("Generated an UPDATE statement with no SET clauses!");
+        }
+        WhereBuilder::continue_from(self.builder)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::catalog::query_builder::{SqlOperation, WhereBuilder};
+    use crate::catalog::query_builder::{SqlOperation, UpdateBuilder, WhereBuilder};
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
     use sqlx::Arguments;
@@ -340,6 +306,30 @@ mod tests {
         assert_eq!(sql, "SELECT FROM table WHERE col1 = ? AND col2 = ?");
     }
 
+    #[test]
+    fn test_update_one_no_where() {
+        let (sql, _) = UpdateBuilder::on_table("test")
+            .set("current_state", "Pending")
+            .into_parts();
+
+        assert_eq!(sql, "UPDATE test SET current_state = ?");
+    }
+
+    #[test]
+    fn test_update_two_one_where() {
+        let (sql, _) = UpdateBuilder::on_table("test")
+            .set("current_state", "Pending")
+            .set("desired_state", "Running")
+            .add_where()
+            .eq("id", "example_query".into())
+            .into_parts();
+
+        assert_eq!(
+            sql,
+            "UPDATE test SET current_state = ?, desired_state = ? WHERE id = ?"
+        );
+    }
+
     impl Arbitrary for SqlOperation {
         fn arbitrary(g: &mut Gen) -> Self {
             use strum::IntoEnumIterator;
@@ -354,11 +344,22 @@ mod tests {
         conditions: Vec<(String, String)>,
     }
 
+    /// Generate a safe SQL column name without special characters
+    fn arbitrary_column_name(g: &mut Gen) -> String {
+        let size = (usize::arbitrary(g) % 20) + 1; // 1-20 chars
+        (0..size)
+            .map(|_| {
+                let chars = b"abcdefghijklmnopqrstuvwxyz_0123456789";
+                chars[usize::arbitrary(g) % chars.len()] as char
+            })
+            .collect()
+    }
+
     impl Arbitrary for WhereBuilderInput {
         fn arbitrary(g: &mut Gen) -> Self {
             let size = usize::arbitrary(g) % 10;
             let conditions: Vec<(String, String)> = (0..size)
-                .map(|_| (String::arbitrary(g), String::arbitrary(g)))
+                .map(|_| (arbitrary_column_name(g), String::arbitrary(g)))
                 .collect();
 
             let builder = conditions.iter().fold(
@@ -380,8 +381,59 @@ mod tests {
     }
 
     #[quickcheck]
-    fn where_builder_correctly_bound(input: WhereBuilderInput) {
-        let (sql, args) = input.builder.into_parts();
-        assert!(input.conditions.iter().all(|(col, _)| sql.contains(col)));
+    fn where_builder_all_columns_present(input: WhereBuilderInput) {
+        let sql = input.builder.to_sql();
+
+        // Verify each column appears in the SQL with its placeholder
+        let all_columns_present = input
+            .conditions
+            .iter()
+            .all(|(col, _)| sql.contains(&format!("{} =", col)));
+
+        assert!(
+            all_columns_present,
+            "Not all columns are present in SQL: {}",
+            sql
+        );
+    }
+
+    #[quickcheck]
+    fn where_builder_placeholder_count_matches(input: WhereBuilderInput) {
+        let (sql, args) = input.builder.clone().into_parts();
+
+        // Count placeholders in SQL
+        let placeholder_count = sql.matches('?').count();
+
+        // Should match the number of arguments
+        assert_eq!(
+            placeholder_count,
+            args.len(),
+            "Placeholder count ({}) doesn't match argument count ({}). SQL: {}",
+            placeholder_count,
+            args.len(),
+            sql
+        );
+    }
+
+    #[quickcheck]
+    fn where_builder_columns_and_args_match(input: WhereBuilderInput) {
+        let (sql, args) = input.builder.clone().into_parts();
+
+        assert_eq!(
+            input.conditions.len(),
+            args.len(),
+            "Number of conditions ({}) doesn't match arguments ({})",
+            input.conditions.len(),
+            args.len()
+        );
+
+        for (col, _) in &input.conditions {
+            assert!(
+                sql.contains(&format!("{} =", col)),
+                "Column '{}' not found in SQL: {}",
+                col,
+                sql
+            );
+        }
     }
 }

@@ -79,6 +79,7 @@ pub mod queries {
     pub const CURRENT_STATE: &str = "current_state";
     pub const DESIRED_STATE: &str = "desired_state";
     pub const SUBMISSION_TIMESTAMP: &str = "submission_timestamp";
+    pub const STOP_MODE: &str = "mode";
 }
 
 pub mod query_log {

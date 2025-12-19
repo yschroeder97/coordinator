@@ -53,7 +53,7 @@ impl SourceCatalog {
             schema as _,
         );
 
-        self.db.insert(query).await?;
+        self.db.execute(query).await?;
         Ok(())
     }
 
@@ -75,7 +75,7 @@ impl SourceCatalog {
             parser_config as _
         );
 
-        self.db.insert(query).await?;
+        self.db.execute(query).await?;
         Ok(())
     }
 

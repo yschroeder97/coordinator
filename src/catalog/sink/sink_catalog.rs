@@ -46,7 +46,7 @@ impl SinkCatalog {
             config as _
         );
 
-        self.db.insert(query).await?;
+        self.db.execute(query).await?;
         Ok(())
     }
 

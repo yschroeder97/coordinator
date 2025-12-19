@@ -63,14 +63,14 @@ pub(crate) enum Rpc {
     GetWorkerStatus(GetWorkerStatusRequest),
 }
 
-use crate::impl_from;
+use crate::into_request;
 
-impl_from!(RegisterFragment, RegisterFragmentRequest, Rpc);
-impl_from!(StartFragment, StartFragmentRequest, Rpc);
-impl_from!(StopFragment, StopFragmentRequest, Rpc);
-impl_from!(UnregisterFragment, UnregisterFragmentRequest, Rpc);
-impl_from!(GetFragmentStatus, GetFragmentStatusRequest, Rpc);
-impl_from!(GetWorkerStatus, GetWorkerStatusRequest, Rpc);
+into_request!(RegisterFragment, RegisterFragmentRequest, Rpc);
+into_request!(StartFragment, StartFragmentRequest, Rpc);
+into_request!(StopFragment, StopFragmentRequest, Rpc);
+into_request!(UnregisterFragment, UnregisterFragmentRequest, Rpc);
+into_request!(GetFragmentStatus, GetFragmentStatusRequest, Rpc);
+into_request!(GetWorkerStatus, GetWorkerStatusRequest, Rpc);
 
 #[derive(Debug)]
 pub(crate) struct WorkerClient {

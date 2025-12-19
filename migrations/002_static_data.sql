@@ -24,3 +24,7 @@ VALUES ('Pending'),
        ('Active'),
        ('Unreachable'),
        ('Removed');
+
+INSERT INTO query_stop_modes (mode)
+VALUES ('Graceful'),
+       ('Forceful'),

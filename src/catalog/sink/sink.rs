@@ -1,6 +1,5 @@
 use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
-use crate::catalog::tables::physical_sources::SOURCE_TYPE;
-use crate::catalog::tables::{physical_sources, sinks, table};
+use crate::catalog::tables::{sinks, table};
 use crate::catalog::worker::worker_endpoint::{HostName, NetworkAddr};
 use crate::errors::CoordinatorErr;
 use crate::request::Request;
@@ -55,16 +54,16 @@ pub struct DropSink {
 pub type DropSinkRequest = Request<DropSink, Result<Vec<Sink>, CoordinatorErr>>;
 
 impl ToSql for DropSink {
-    fn to_sql(&self) -> (String, SqliteArguments) {
+    fn to_sql(&self) -> (String, SqliteArguments<'_>) {
         WhereBuilder::from(SqlOperation::Delete(table::PHYSICAL_SOURCES))
             .eq(sinks::NAME, self.with_name.clone())
             .eq(
                 sinks::PLACEMENT_HOST_NAME,
-                self.on_worker.clone().and_then(|worker| Some(worker.host)),
+                self.on_worker.clone().map(|worker| worker.host),
             )
             .eq(
                 sinks::PLACEMENT_GRPC_PORT,
-                self.on_worker.clone().and_then(|worker| Some(worker.port)),
+                self.on_worker.clone().map(|worker| worker.port),
             )
             .eq(sinks::SINK_TYPE, self.with_type)
             .into_parts()

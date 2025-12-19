@@ -47,10 +47,16 @@ impl WorkerRegistry {
     }
 
     pub fn register(&self, addr: GrpcAddr, sender: flume::Sender<Rpc>) {
-        self.shared.write().unwrap().insert(addr, sender);
+        self.shared
+            .write()
+            .unwrap()
+            .insert(addr, sender);
     }
 
     pub fn unregister(&self, addr: &GrpcAddr) {
-        self.shared.write().unwrap().remove(addr);
+        self.shared
+            .write()
+            .unwrap()
+            .remove(addr);
     }
 }

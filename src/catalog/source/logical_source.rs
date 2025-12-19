@@ -30,7 +30,7 @@ pub type DropLogicalSourceRequest =
     Request<DropLogicalSource, Result<LogicalSource, CoordinatorErr>>;
 
 impl ToSql for DropLogicalSource {
-    fn to_sql(&self) -> (String, SqliteArguments) {
+    fn to_sql(&self) -> (String, SqliteArguments<'_>) {
         WhereBuilder::from(SqlOperation::Delete(table::LOGICAL_SOURCES))
             .eq(logical_sources::NAME, self.source_name.clone())
             .into_parts()
