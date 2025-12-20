@@ -5,9 +5,9 @@ use crate::catalog::worker::worker_endpoint::{GrpcAddr, HostAddr, HostName};
 use crate::errors::CoordinatorErr;
 use crate::request::Request;
 use sqlx::sqlite::SqliteArguments;
-use strum::Display;
+use strum::{Display, EnumIter};
 
-#[derive(Debug, Clone, Copy, sqlx::Type, PartialEq, Display)]
+#[derive(Debug, Clone, Copy, sqlx::Type, PartialEq, Display, EnumIter)]
 pub enum WorkerState {
     Pending,
     Active,

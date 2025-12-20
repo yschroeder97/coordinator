@@ -2,7 +2,7 @@ use crate::catalog::database::DatabaseErr;
 use crate::catalog::query::query_catalog::QueryCatalogError;
 use crate::catalog::sink::sink_catalog::SinkCatalogError;
 use crate::catalog::source::source_catalog::SourceCatalogErr;
-use crate::catalog::worker::worker_catalog::WorkerCatalogError;
+use crate::catalog::worker::worker_catalog::WorkerCatalogErr;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -11,7 +11,7 @@ pub enum CatalogErr {
     Source(#[from] SourceCatalogErr),
 
     #[error("Worker catalog error: {0}")]
-    Worker(#[from] WorkerCatalogError),
+    Worker(#[from] WorkerCatalogErr),
 
     #[error("Query catalog error: {0}")]
     Query(#[from] QueryCatalogError),

@@ -22,16 +22,31 @@ pub struct CreateLogicalSource {
 }
 pub type CreateLogicalSourceRequest = Request<CreateLogicalSource, Result<(), CoordinatorErr>>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DropLogicalSource {
     pub source_name: Option<LogicalSourceName>,
 }
 pub type DropLogicalSourceRequest =
-    Request<DropLogicalSource, Result<LogicalSource, CoordinatorErr>>;
+    Request<DropLogicalSource, Result<Option<LogicalSource>, CoordinatorErr>>;
 
 impl ToSql for DropLogicalSource {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {
         WhereBuilder::from(SqlOperation::Delete(table::LOGICAL_SOURCES))
+            .eq(logical_sources::NAME, self.source_name.clone())
+            .into_parts()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GetLogicalSource {
+    pub source_name: Option<LogicalSourceName>,
+}
+pub type GetLogicalSourceRequest =
+Request<GetLogicalSource, Result<LogicalSource, CoordinatorErr>>;
+
+impl ToSql for GetLogicalSource {
+    fn to_sql(&self) -> (String, SqliteArguments<'_>) {
+        WhereBuilder::from(SqlOperation::Select(table::LOGICAL_SOURCES))
             .eq(logical_sources::NAME, self.source_name.clone())
             .into_parts()
     }

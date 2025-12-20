@@ -2,7 +2,7 @@ use crate::catalog::notification::Notifier;
 use crate::catalog::worker::worker::GetWorker;
 use crate::catalog::worker::worker::WorkerState;
 use crate::catalog::worker::worker_endpoint::{GrpcAddr, NetworkAddr};
-use crate::catalog::WorkerCatalog;
+use crate::catalog::worker::worker_catalog::WorkerCatalog;
 use crate::network::cluster_service::WorkerStateInternal::{Active, Pending};
 use crate::network::poly_join_set::{AbortHandle, JoinSet};
 use crate::network::worker_client::{ConnErr, Rpc, WorkerClient};

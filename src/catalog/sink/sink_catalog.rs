@@ -1,5 +1,6 @@
 use crate::catalog::database::{Database, DatabaseErr};
 use crate::catalog::query_builder::ToSql;
+use crate::catalog::sink::sink::GetSink;
 use crate::catalog::sink::sink::{CreateSink, DropSink, Sink, SinkName};
 use crate::catalog::worker::worker_endpoint::HostName;
 use std::sync::Arc;
@@ -53,5 +54,10 @@ impl SinkCatalog {
     pub async fn drop_sink(&self, drop_sink: &DropSink) -> Result<Vec<Sink>, SinkCatalogError> {
         let (stmt, args) = drop_sink.to_sql();
         self.db.delete_many(&stmt, args).await.map_err(Into::into)
+    }
+
+    pub async fn get_sinks(&self, get_sinks: &GetSink) -> Result<Vec<Sink>, SinkCatalogError> {
+        let (stmt, args) = get_sinks.to_sql();
+        self.db.select(&stmt, args).await.map_err(Into::into)
     }
 }

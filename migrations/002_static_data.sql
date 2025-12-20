@@ -27,4 +27,4 @@ VALUES ('Pending'),
 
 INSERT INTO query_stop_modes (mode)
 VALUES ('Graceful'),
-       ('Forceful'),
+       ('Forceful');

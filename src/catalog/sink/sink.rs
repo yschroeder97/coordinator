@@ -46,6 +46,7 @@ pub struct CreateSink {
 }
 pub type CreateSinkRequest = Request<CreateSink, Result<(), CoordinatorErr>>;
 
+#[derive(Debug, Clone)]
 pub struct DropSink {
     pub with_name: Option<SinkName>,
     pub on_worker: Option<NetworkAddr>,
@@ -56,6 +57,31 @@ pub type DropSinkRequest = Request<DropSink, Result<Vec<Sink>, CoordinatorErr>>;
 impl ToSql for DropSink {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {
         WhereBuilder::from(SqlOperation::Delete(table::PHYSICAL_SOURCES))
+            .eq(sinks::NAME, self.with_name.clone())
+            .eq(
+                sinks::PLACEMENT_HOST_NAME,
+                self.on_worker.clone().map(|worker| worker.host),
+            )
+            .eq(
+                sinks::PLACEMENT_GRPC_PORT,
+                self.on_worker.clone().map(|worker| worker.port),
+            )
+            .eq(sinks::SINK_TYPE, self.with_type)
+            .into_parts()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GetSink {
+    pub with_name: Option<SinkName>,
+    pub on_worker: Option<NetworkAddr>,
+    pub with_type: Option<SinkType>,
+}
+pub type GetSinkRequest = Request<GetSink, Result<Vec<Sink>, CoordinatorErr>>;
+
+impl ToSql for GetSink {
+    fn to_sql(&self) -> (String, SqliteArguments<'_>) {
+        WhereBuilder::from(SqlOperation::Select(table::SINKS))
             .eq(sinks::NAME, self.with_name.clone())
             .eq(
                 sinks::PLACEMENT_HOST_NAME,

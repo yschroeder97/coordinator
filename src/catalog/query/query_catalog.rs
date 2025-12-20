@@ -1,7 +1,8 @@
+use crate::catalog::query::query::GetQuery;
 use crate::catalog::query_builder::ToSql;
 use crate::catalog::notification::Notifier;
 use tokio::sync::watch;
-use super::query::{CreateQuery, DropQuery, GetQuery, Query, QueryId, QueryState};
+use super::query::{CreateQuery, DropQuery, QueryId};
 use crate::catalog::database::{Database, DatabaseErr};
 use crate::catalog::sink::sink::SinkName;
 use std::sync::Arc;
@@ -75,6 +76,16 @@ impl QueryCatalog {
         drop_req: &DropQuery,
     ) -> Result<(), QueryCatalogError> {
         let (sql, args) = drop_req.to_sql();
+        self.db.update(&sql, args).await?;
+        self.notify();
+        Ok(())
+    }
+
+    pub async fn get_queries(
+        &self,
+        get_req: &GetQuery,
+    ) -> Result<(), QueryCatalogError> {
+        let (sql, args) = get_req.to_sql();
         self.db.update(&sql, args).await?;
         self.notify();
         Ok(())

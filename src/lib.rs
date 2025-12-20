@@ -1,4 +1,4 @@
-mod catalog;
+pub mod catalog;
 pub mod coordinator;
 pub mod errors;
 mod message_bus;

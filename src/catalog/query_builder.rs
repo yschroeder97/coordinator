@@ -101,10 +101,9 @@ impl WhereBuilder {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use query_builder::WhereBuilder;
-    ///
-    /// let builder = WhereBuilder::new(SqlOperation::Select, "users");
+    /// ```
+    /// # use coordinator::catalog::query_builder::{WhereBuilder, SqlOperation};
+    /// let builder = WhereBuilder::from(SqlOperation::Select("users"));
     /// ```
     pub fn from(op: SqlOperation) -> Self {
         WhereBuilder {
@@ -145,10 +144,10 @@ impl WhereBuilder {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use query_builder::WhereBuilder;
+    /// ```
+    /// # use coordinator::catalog::query_builder::{WhereBuilder, SqlOperation};
     ///
-    /// let query = WhereBuilder::new("SELECT * FROM users")
+    /// let query = WhereBuilder::from(SqlOperation::Select("users"))
     ///     .and_if("age", ">", Some(18))
     ///     .and_if("status", "=", None::<String>) // This won't add anything
     ///     .into_parts();
@@ -168,13 +167,13 @@ impl WhereBuilder {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use query_builder::WhereBuilder;
+    /// ```
+    /// # use coordinator::catalog::query_builder::{WhereBuilder, SqlOperation};
     ///
-    /// let query = WhereBuilder::new("SELECT * FROM users")
+    /// let query = WhereBuilder::from(SqlOperation::Select("users"))
     ///     .eq("status", Some("active"))
     ///     .into_parts();
-    /// // Generates: SELECT * FROM users WHERE status = $1
+    /// // Generates: SELECT FROM users WHERE status = ?
     /// ```
     pub fn eq<T>(self, column: &str, value: Option<T>) -> Self
     where
@@ -186,18 +185,18 @@ impl WhereBuilder {
     /// Returns the generated SQL string for debugging purposes.
     ///
     /// This is useful for inspecting the generated query without executing it.
-    /// Parameter placeholders (`$1`, `$2`, etc.) will be visible in the output.
+    /// Parameter placeholders (`?`) will be visible in the output.
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use query_builder::WhereBuilder;
+    /// ```
+    /// # use coordinator::catalog::query_builder::{WhereBuilder, SqlOperation};
     ///
-    /// let builder = WhereBuilder::new("SELECT * FROM users")
+    /// let builder = WhereBuilder::from(SqlOperation::Select("users"))
     ///     .eq("status", Some("active"));
     ///
     /// println!("{}", builder.to_sql());
-    /// // Prints: SELECT * FROM users WHERE status = $1
+    /// // Prints: SELECT FROM users WHERE status = ?
     /// ```
     pub fn to_sql(&self) -> String {
         self.builder.sql().to_string()
@@ -210,10 +209,10 @@ impl WhereBuilder {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use query_builder::WhereBuilder;
+    /// ```
+    /// # use coordinator::catalog::query_builder::{WhereBuilder, SqlOperation};
     ///
-    /// let (sql, arguments) = WhereBuilder::new("SELECT * FROM users")
+    /// let (sql, arguments) = WhereBuilder::from(SqlOperation::Select("users"))
     ///     .eq("status", Some("active"))
     ///     .into_parts();
     ///

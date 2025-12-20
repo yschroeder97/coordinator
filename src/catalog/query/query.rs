@@ -1,6 +1,6 @@
-use crate::catalog::tables::queries;
+use crate::catalog::query_builder::{SqlOperation, ToSql, UpdateBuilder, WhereBuilder};
 use crate::catalog::tables::table;
-use crate::catalog::query_builder::{ToSql, UpdateBuilder};
+use crate::catalog::tables::{queries, workers};
 use crate::catalog::worker::worker_endpoint::{HostName, NetworkAddr};
 use crate::errors::CoordinatorErr;
 use crate::request::Request;
@@ -117,6 +117,33 @@ impl ToSql for DropQuery {
 #[derive(Clone, Debug)]
 pub struct GetQuery {
     pub with_id: Option<QueryId>,
-    pub with_state: Option<QueryState>,
-    pub on_worker: Option<HostName>,
+    pub with_current_state: Option<QueryState>,
+    pub with_desired_state: Option<QueryState>,
+}
+pub type GetQueryRequest = Request<GetQuery, Result<(), CoordinatorErr>>;
+
+impl ToSql for GetQuery {
+    fn to_sql(&self) -> (String, SqliteArguments<'_>) {
+        WhereBuilder::from(SqlOperation::Select(table::QUERIES))
+            .eq(workers::HOST_NAME, self.with_id.clone())
+            .eq(workers::CURRENT_STATE, self.with_current_state)
+            .eq(workers::DESIRED_STATE, self.with_desired_state)
+            .into_parts()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MarkQuery {
+    pub id: QueryId,
+    pub new_current: QueryState,
+}
+
+impl ToSql for MarkQuery {
+    fn to_sql(&self) -> (String, SqliteArguments<'_>) {
+        UpdateBuilder::on_table(table::QUERIES)
+            .set(queries::CURRENT_STATE, self.new_current)
+            .add_where()
+            .eq(queries::ID, Some(self.id.clone()))
+            .into_parts()
+    }
 }

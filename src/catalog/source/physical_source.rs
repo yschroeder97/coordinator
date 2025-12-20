@@ -79,3 +79,32 @@ impl ToSql for DropPhysicalSource {
             .into_parts()
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct GetPhysicalSource {
+    pub with_logical_source: Option<LogicalSourceName>,
+    pub on_worker: Option<NetworkAddr>,
+    pub with_type: Option<SourceType>,
+}
+pub type GetPhysicalSourceRequest =
+Request<GetPhysicalSource, Result<Vec<PhysicalSource>, CoordinatorErr>>;
+
+impl ToSql for GetPhysicalSource {
+    fn to_sql(&self) -> (String, SqliteArguments<'_>) {
+        WhereBuilder::from(SqlOperation::Delete(table::PHYSICAL_SOURCES))
+            .eq(
+                physical_sources::LOGICAL_SOURCE,
+                self.with_logical_source.clone(),
+            )
+            .eq(
+                physical_sources::PLACEMENT_HOST_NAME,
+                self.on_worker.clone().map(|worker| worker.host),
+            )
+            .eq(
+                physical_sources::PLACEMENT_GRPC_PORT,
+                self.on_worker.clone().map(|worker| worker.port),
+            )
+            .eq(physical_sources::SOURCE_TYPE, self.with_type)
+            .into_parts()
+    }
+}
