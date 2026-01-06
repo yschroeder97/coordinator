@@ -282,6 +282,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.17",
  "tokio-retry2",
+ "tokio-util",
  "tower 0.5.2",
  "tracing",
  "tracing-subscriber",

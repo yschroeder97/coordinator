@@ -1,12 +1,12 @@
-use std::env;
-use std::sync::Arc;
-
 use crate::catalog::catalog_errors::CatalogErr;
 use crate::catalog::database::Database;
 use crate::catalog::query::query_catalog::QueryCatalog;
 use crate::catalog::sink::sink_catalog::SinkCatalog;
 use crate::catalog::source::source_catalog::SourceCatalog;
 use crate::catalog::worker::worker_catalog::WorkerCatalog;
+use sqlx::SqlitePool;
+use std::env;
+use std::sync::Arc;
 
 pub mod catalog_errors;
 mod database;
@@ -23,6 +23,7 @@ pub struct Catalog {
     pub sink: Arc<SinkCatalog>,
     pub worker: Arc<WorkerCatalog>,
     pub query: Arc<QueryCatalog>,
+    pool: SqlitePool,
 }
 
 impl Catalog {
@@ -32,6 +33,7 @@ impl Catalog {
             sink: Arc::new(SinkCatalog::new(db.clone())),
             worker: Arc::new(WorkerCatalog::new(db.clone())),
             query: Arc::new(QueryCatalog::new(db.clone())),
+            pool: db.pool(),
         }
     }
 
@@ -80,22 +82,30 @@ impl Catalog {
     pub fn sink_catalog(&self) -> Arc<SinkCatalog> {
         self.sink.clone()
     }
+
+    pub fn pool(&self) -> SqlitePool {
+        self.pool.clone()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::sink::sink::{CreateSink, SinkType};
+    use crate::catalog::query::{FragmentState, QueryState};
+    use crate::catalog::sink::{CreateSink, SinkType};
     use crate::catalog::source::logical_source::{CreateLogicalSource, DropLogicalSource};
     use crate::catalog::source::physical_source::{CreatePhysicalSource, SourceType};
     use crate::catalog::source::schema::{AttributeField, DataType, Schema};
-    use crate::catalog::worker::worker::{CreateWorker, DropWorker, WorkerState};
-    use crate::catalog::worker::worker_endpoint::GrpcAddr;
+    use crate::catalog::tables::{query_fragment_states, query_states, table, worker_states};
+    use crate::catalog::worker::endpoint::GrpcAddr;
+    use crate::catalog::worker::{CreateWorker, DropWorker, WorkerState};
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
     use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::{Sqlite, SqlitePool};
     use std::future::Future;
     use std::sync::OnceLock;
+    use strum::IntoEnumIterator;
     use tokio::runtime::Runtime;
 
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -146,7 +156,6 @@ mod tests {
 
     impl Arbitrary for DataType {
         fn arbitrary(g: &mut Gen) -> Self {
-            use strum::IntoEnumIterator;
             let variants: Vec<DataType> = DataType::iter().collect();
             *g.choose(&variants).expect("choose value")
         }
@@ -172,7 +181,6 @@ mod tests {
 
     impl Arbitrary for SourceType {
         fn arbitrary(g: &mut Gen) -> Self {
-            use strum::IntoEnumIterator;
             let variants: Vec<SourceType> = SourceType::iter().collect();
             *g.choose(&variants).expect("choose value")
         }
@@ -180,7 +188,6 @@ mod tests {
 
     impl Arbitrary for SinkType {
         fn arbitrary(g: &mut Gen) -> Self {
-            use strum::IntoEnumIterator;
             let variants: Vec<SinkType> = SinkType::iter().collect();
             *g.choose(&variants).expect("choose value")
         }
@@ -188,7 +195,6 @@ mod tests {
 
     impl Arbitrary for WorkerState {
         fn arbitrary(g: &mut Gen) -> Self {
-            use strum::IntoEnumIterator;
             let variants: Vec<WorkerState> = WorkerState::iter().collect();
             *g.choose(&variants).expect("choose value")
         }
@@ -526,5 +532,41 @@ mod tests {
                 .await
                 .expect("Second create after drop should succeed");
         })
+    }
+
+    async fn cmp_tbl_enum<T>(pool: &SqlitePool, tbl_name: &'static str, col_name: &'static str)
+    where
+        T: Send + Unpin + IntoEnumIterator + PartialEq + std::fmt::Debug,
+        T: for<'r> sqlx::Decode<'r, Sqlite> + sqlx::Type<Sqlite>,
+    {
+        let stmt = format!("SELECT {} FROM {}", col_name, tbl_name);
+
+        let actual: Vec<T> = sqlx::query_scalar(stmt.as_str())
+            .fetch_all(pool)
+            .await
+            .expect("Failed to fetch enum values from DB");
+
+        let expected: Vec<T> = T::iter().collect();
+
+        // Note: This relies on the DB order matching the Enum definition order.
+        assert_eq!(
+            actual, expected,
+            "Internal table {} out-of-sync with enum",
+            tbl_name
+        );
+    }
+
+    #[sqlx::test]
+    async fn static_tables_in_sync(pool: SqlitePool) {
+        let catalog = Catalog::from_pool(pool).await.unwrap();
+        cmp_tbl_enum::<WorkerState>(&catalog.pool, table::WORKER_STATES, worker_states::STATE)
+            .await;
+        cmp_tbl_enum::<QueryState>(&catalog.pool, table::QUERY_STATES, query_states::STATE).await;
+        cmp_tbl_enum::<FragmentState>(
+            &catalog.pool,
+            table::QUERY_FRAGMENT_STATES,
+            query_fragment_states::STATE,
+        )
+        .await;
     }
 }

@@ -1,12 +1,11 @@
-use crate::catalog::query::query::GetQuery;
-use crate::catalog::query_builder::ToSql;
-use crate::catalog::notification::Notifier;
-use tokio::sync::watch;
-use super::query::{CreateQuery, DropQuery, QueryId};
+use super::{CreateQuery, DropQuery, GetQuery, Query, QueryId};
 use crate::catalog::database::{Database, DatabaseErr};
-use crate::catalog::sink::sink::SinkName;
+use crate::catalog::notification::Notifier;
+use crate::catalog::query_builder::ToSql;
+use crate::catalog::sink::SinkName;
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::watch;
 
 #[derive(Error, Debug)]
 pub enum QueryCatalogError {
@@ -71,23 +70,15 @@ impl QueryCatalog {
         Ok(())
     }
 
-    pub async fn drop_query(
-        &self,
-        drop_req: &DropQuery,
-    ) -> Result<(), QueryCatalogError> {
+    pub async fn drop_query(&self, drop_req: &DropQuery) -> Result<(), QueryCatalogError> {
         let (sql, args) = drop_req.to_sql();
         self.db.update(&sql, args).await?;
         self.notify();
         Ok(())
     }
 
-    pub async fn get_queries(
-        &self,
-        get_req: &GetQuery,
-    ) -> Result<(), QueryCatalogError> {
+    pub async fn get_queries(&self, get_req: &GetQuery) -> Result<Vec<Query>, QueryCatalogError> {
         let (sql, args) = get_req.to_sql();
-        self.db.update(&sql, args).await?;
-        self.notify();
-        Ok(())
+        self.db.select(&sql, args).await.map_err(Into::into)
     }
 }

@@ -1,8 +1,7 @@
 use crate::catalog::notification::Notifier;
-use crate::catalog::worker::worker::GetWorker;
-use crate::catalog::worker::worker::WorkerState;
-use crate::catalog::worker::worker_endpoint::{GrpcAddr, NetworkAddr};
+use crate::catalog::worker::{GetWorker, WorkerState};
 use crate::catalog::worker::worker_catalog::WorkerCatalog;
+use crate::catalog::worker::endpoint::{GrpcAddr, NetworkAddr};
 use crate::network::cluster_service::WorkerStateInternal::{Active, Pending};
 use crate::network::poly_join_set::{AbortHandle, JoinSet};
 use crate::network::worker_client::{ConnErr, Rpc, WorkerClient};
@@ -82,7 +81,6 @@ impl ClusterService {
             .await
             .unwrap();
 
-        // Only add workers that are not present in the set
         for worker in to_add {
             let addr = GrpcAddr::new(worker.host_name, worker.grpc_port);
             if let Entry::Vacant(e) = self.workers.entry(addr.clone()) {
@@ -150,7 +148,7 @@ impl ClusterService {
 
     async fn on_connect_err(&mut self, err: tonic::transport::Error, addr: GrpcAddr) -> () {
         self.catalog
-            .mark_worker(&addr, WorkerState::Failed)
+            .mark_worker(&addr, WorkerState::Unreachable)
             .await
             .unwrap();
 

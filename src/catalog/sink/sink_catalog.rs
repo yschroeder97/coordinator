@@ -1,8 +1,7 @@
 use crate::catalog::database::{Database, DatabaseErr};
 use crate::catalog::query_builder::ToSql;
-use crate::catalog::sink::sink::GetSink;
-use crate::catalog::sink::sink::{CreateSink, DropSink, Sink, SinkName};
-use crate::catalog::worker::worker_endpoint::HostName;
+use crate::catalog::sink::{CreateSink, DropSink, GetSink, Sink, SinkName};
+use crate::catalog::worker::endpoint::HostName;
 use std::sync::Arc;
 use thiserror::Error;
 

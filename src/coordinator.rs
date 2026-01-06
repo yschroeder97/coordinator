@@ -1,9 +1,6 @@
-use crate::catalog::Catalog;
 use crate::catalog::catalog_errors::CatalogErr;
-use crate::catalog::query::query::GetQueryRequest;
-use crate::catalog::query::query::{CreateQueryRequest, DropQueryRequest};
-use crate::catalog::sink::sink::GetSinkRequest;
-use crate::catalog::sink::sink::{CreateSinkRequest, DropSinkRequest};
+use crate::catalog::query::{CreateQueryRequest, DropQueryRequest, GetQueryRequest};
+use crate::catalog::sink::{CreateSinkRequest, DropSinkRequest, GetSinkRequest};
 use crate::catalog::source::logical_source::GetLogicalSourceRequest;
 use crate::catalog::source::logical_source::{
     CreateLogicalSourceRequest, DropLogicalSourceRequest,
@@ -12,8 +9,8 @@ use crate::catalog::source::physical_source::GetPhysicalSourceRequest;
 use crate::catalog::source::physical_source::{
     CreatePhysicalSourceRequest, DropPhysicalSourceRequest,
 };
-use crate::catalog::worker::worker::GetWorkerRequest;
-use crate::catalog::worker::worker::{CreateWorkerRequest, DropWorkerRequest};
+use crate::catalog::worker::{CreateWorkerRequest, DropWorkerRequest, GetWorkerRequest};
+use crate::catalog::Catalog;
 use crate::errors::CoordinatorErr;
 pub use crate::message_bus::{message_bus, CoordinatorHandle, CoordinatorReceiver};
 use crate::network::cluster_service::ClusterService;

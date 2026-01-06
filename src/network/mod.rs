@@ -1,4 +1,4 @@
-pub(crate) mod cluster_service;
-pub(crate) mod worker_client;
-pub(crate) mod poly_join_set;
-mod worker_registry;
+pub mod cluster_service;
+pub mod worker_client;
+pub mod poly_join_set;
+pub mod worker_registry;

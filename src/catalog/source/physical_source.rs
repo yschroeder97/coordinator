@@ -1,7 +1,7 @@
 use super::logical_source::LogicalSourceName;
 use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
 use crate::catalog::tables::{physical_sources, table};
-use crate::catalog::worker::worker_endpoint::{HostName, NetworkAddr};
+use crate::catalog::worker::endpoint::{HostName, NetworkAddr};
 use crate::errors::CoordinatorErr;
 use crate::request::Request;
 use serde::{Deserialize, Serialize};

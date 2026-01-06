@@ -209,4 +209,8 @@ impl Database {
         })
         .await
     }
+    
+    pub fn pool(&self) -> SqlitePool {
+        self.pool.clone()
+    }
 }

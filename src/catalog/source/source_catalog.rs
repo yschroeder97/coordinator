@@ -7,7 +7,7 @@ use crate::catalog::source::physical_source::{
     CreatePhysicalSource, DropPhysicalSource, GetPhysicalSource, PhysicalSource,
 };
 use crate::catalog::tables::{deployed_sources, logical_sources, physical_sources, table};
-use crate::catalog::worker::worker_endpoint::HostName;
+use crate::catalog::worker::endpoint::HostName;
 use std::sync::Arc;
 use thiserror::Error;
 

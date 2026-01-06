@@ -17,6 +17,7 @@ tokio = { version = "0.2", package = "madsim-tokio", features = [
     "macros",
     "time",
 ] }
+tokio-util = "0.7.17"
 
 sqlx = { version = "0.8.2", features = ["sqlite", "runtime-tokio", "macros", "json"] }
 

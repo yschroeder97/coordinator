@@ -1,5 +1,5 @@
-use crate::catalog::query::query::{FragmentId, StopMode};
-use crate::catalog::worker::worker_endpoint::GrpcAddr;
+use crate::catalog::query::{FragmentId, StopMode};
+use crate::catalog::worker::endpoint::GrpcAddr;
 use crate::network::worker_client::worker_rpc_service::worker_rpc_service_client::WorkerRpcServiceClient;
 use crate::network::worker_client::worker_rpc_service::{
     QueryStatusReply, QueryStatusRequest, RegisterQueryReply, RegisterQueryRequest,
@@ -173,7 +173,7 @@ async fn register_fragment(
         .map(|response| response.into_inner())
         .map_err(WorkerClientError::from);
 
-    let _ = req.respond(result);
+    let _ = req.reply(result);
 }
 
 async fn start_fragment(mut client: WorkerRpcServiceClient<Channel>, req: StartFragmentRequest) {
@@ -185,7 +185,7 @@ async fn start_fragment(mut client: WorkerRpcServiceClient<Channel>, req: StartF
         .map(|_| ())
         .map_err(WorkerClientError::from);
 
-    let _ = req.respond(result);
+    let _ = req.reply(result);
 }
 
 async fn stop_fragment(mut client: WorkerRpcServiceClient<Channel>, req: StopFragmentRequest) {
@@ -199,7 +199,7 @@ async fn stop_fragment(mut client: WorkerRpcServiceClient<Channel>, req: StopFra
         .map(|_| ())
         .map_err(WorkerClientError::from);
 
-    let _ = req.respond(result);
+    let _ = req.reply(result);
 }
 
 async fn unregister_fragment(
@@ -214,7 +214,7 @@ async fn unregister_fragment(
         .map(|_| ())
         .map_err(WorkerClientError::from);
 
-    let _ = req.respond(result);
+    let _ = req.reply(result);
 }
 
 async fn get_fragment_status(
@@ -229,7 +229,7 @@ async fn get_fragment_status(
         .map(|response| response.into_inner())
         .map_err(WorkerClientError::from);
 
-    let _ = req.respond(result);
+    let _ = req.reply(result);
 }
 
 async fn get_worker_status(
@@ -244,5 +244,5 @@ async fn get_worker_status(
         .map(|response| response.into_inner())
         .map_err(WorkerClientError::from);
 
-    let _ = req.respond(result);
+    let _ = req.reply(result);
 }

@@ -1,11 +1,9 @@
-use super::worker::{CreateWorker, DropWorker, GetWorker, Worker};
+use super::endpoint::{GrpcAddr, HostName};
+use super::{CreateWorker, DropWorker, GetWorker, MarkWorker, Worker, WorkerState};
 use crate::catalog::database::{Database, DatabaseErr, TxnErr};
 use crate::catalog::notification::Notifier;
 use crate::catalog::query_builder::ToSql;
 use crate::catalog::tables::table;
-use crate::catalog::worker::worker::MarkWorker;
-use crate::catalog::worker::worker::WorkerState;
-use crate::catalog::worker::worker_endpoint::{GrpcAddr, HostName};
 use sqlx::QueryBuilder;
 use std::sync::Arc;
 use thiserror::Error;

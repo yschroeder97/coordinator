@@ -1,34 +1,37 @@
-use crate::catalog::worker::worker_endpoint::GrpcAddr;
+use crate::catalog::worker::endpoint::GrpcAddr;
 use crate::network::worker_client::Rpc;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-
-pub(crate) enum WorkerRegistryErr {
-    SendErr(flume::SendError<Rpc>),
-    AddrNotFound,
-}
-
-pub(crate) type WorkerRegistryResult = Result<(), WorkerRegistryErr>;
+use thiserror::Error;
 
 /// Read-only handle for sending RPCs to workers
 pub(crate) struct WorkerRegistryHandle {
     shared: Arc<RwLock<HashMap<GrpcAddr, flume::Sender<Rpc>>>>,
 }
 
+#[derive(Error, Debug)]
+pub enum WorkerRegistryErr {
+    #[error("Worker at address '{0}' not found in registry")]
+    AddrNotFound(GrpcAddr),
+
+    #[error("Worker client receiver actor for address '{0}' has been dropped")]
+    ClientUnavailable(GrpcAddr),
+}
+
 impl WorkerRegistryHandle {
-    pub async fn send_rpc(&self, addr: &GrpcAddr, rpc: Rpc) -> WorkerRegistryResult {
+    pub(crate) async fn send_rpc(&self, addr: &GrpcAddr, rpc: Rpc) -> Result<(), WorkerRegistryErr> {
         let sender = {
             let workers = self.shared.read().unwrap();
-            workers.get(addr).cloned()
+            workers.get(&addr).cloned()
         };
 
         if let Some(sender) = sender {
             sender
                 .send_async(rpc)
                 .await
-                .map_err(WorkerRegistryErr::SendErr)
+                .map_err(|_| WorkerRegistryErr::ClientUnavailable(addr.clone()))
         } else {
-            Err(WorkerRegistryErr::AddrNotFound)
+            Err(WorkerRegistryErr::AddrNotFound(addr.clone()))
         }
     }
 }
@@ -40,23 +43,17 @@ pub(crate) struct WorkerRegistry {
 }
 
 impl WorkerRegistry {
-    pub fn handle(&self) -> WorkerRegistryHandle {
+    pub(crate) fn handle(&self) -> WorkerRegistryHandle {
         WorkerRegistryHandle {
             shared: self.shared.clone(),
         }
     }
 
-    pub fn register(&self, addr: GrpcAddr, sender: flume::Sender<Rpc>) {
-        self.shared
-            .write()
-            .unwrap()
-            .insert(addr, sender);
+    pub(crate) fn register(&self, addr: GrpcAddr, sender: flume::Sender<Rpc>) {
+        self.shared.write().unwrap().insert(addr, sender);
     }
 
-    pub fn unregister(&self, addr: &GrpcAddr) {
-        self.shared
-            .write()
-            .unwrap()
-            .remove(addr);
+    pub(crate) fn unregister(&self, addr: &GrpcAddr) {
+        self.shared.write().unwrap().remove(addr);
     }
 }
