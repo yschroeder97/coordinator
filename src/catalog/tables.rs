@@ -8,14 +8,17 @@
 /// and make schema changes easier to manage across the codebase.
 pub mod table {
     pub const WORKERS: &str = "workers";
+    pub const WORKER_CHANGELOG: &str = "worker_changelog";
     pub const WORKER_STATES: &str = "worker_states";
     pub const NETWORK_LINKS: &str = "network_links";
     pub const LOGICAL_SOURCES: &str = "logical_sources";
     pub const PHYSICAL_SOURCES: &str = "physical_sources";
     pub const SINKS: &str = "sinks";
     pub const QUERY_STATES: &str = "query_states";
-    pub const QUERIES: &str = "queries";
-    pub const QUERY_LOG: &str = "query_log";
+    pub const QUERY_STOP_MODES: &str = "query_stop_modes";
+    pub const ACTIVE_QUERIES: &str = "active_queries";
+    pub const TERMINATED_QUERIES: &str = "terminated_queries";
+    pub const QUERY_CHANGELOG: &str = "query_changelog";
     pub const DEPLOYED_SOURCES: &str = "deployed_sources";
     pub const QUERY_FRAGMENT_STATES: &str = "query_fragment_states";
     pub const QUERY_FRAGMENTS: &str = "query_fragments";
@@ -30,6 +33,15 @@ pub mod workers {
     pub const HOST_NAME: &str = "host_name";
     pub const GRPC_PORT: &str = "grpc_port";
     pub const DATA_PORT: &str = "data_port";
+    pub const CAPACITY: &str = "capacity";
+    pub const CURRENT_STATE: &str = "current_state";
+    pub const DESIRED_STATE: &str = "desired_state";
+}
+
+pub mod worker_changelog {
+    pub const HOST_NAME: &str = "host_name";
+    pub const GRPC_PORT: &str = "grpc_port";
+    pub const TIMESTAMP: &str = "timestamp";
     pub const CAPACITY: &str = "capacity";
     pub const CURRENT_STATE: &str = "current_state";
     pub const DESIRED_STATE: &str = "desired_state";
@@ -73,22 +85,32 @@ pub mod query_states {
     pub const STATE: &str = "state";
 }
 
-pub mod queries {
+pub mod query_stop_modes {
+    pub const MODE: &str = "mode";
+}
+
+pub mod active_queries {
     pub const ID: &str = "id";
     pub const STATEMENT: &str = "statement";
     pub const CURRENT_STATE: &str = "current_state";
     pub const DESIRED_STATE: &str = "desired_state";
-    pub const SUBMISSION_TIMESTAMP: &str = "submission_timestamp";
-    pub const STOP_MODE: &str = "mode";
+    pub const STOP_MODE: &str = "stop_mode";
 }
 
-pub mod query_log {
+pub mod terminated_queries {
     pub const ID: &str = "id";
     pub const STATEMENT: &str = "statement";
     pub const TERMINATION_STATE: &str = "termination_state";
-    pub const SUBMISSION_TIMESTAMP: &str = "submission_timestamp";
-    pub const TERMINATION_TIMESTAMP: &str = "termination_timestamp";
     pub const ERROR: &str = "error";
+    pub const STACK_TRACE: &str = "stack_trace";
+}
+
+pub mod query_changelog {
+    pub const QUERY_ID: &str = "query_id";
+    pub const STATEMENT: &str = "statement";
+    pub const TIMESTAMP: &str = "timestamp";
+    pub const CURRENT_STATE: &str = "current_state";
+    pub const DESIRED_STATE: &str = "desired_state";
 }
 
 pub mod deployed_sources {

@@ -1,14 +1,15 @@
 pub mod query_catalog;
 
+use crate::catalog::catalog_errors::CatalogErr;
 use crate::catalog::query_builder::{SqlOperation, ToSql, UpdateBuilder, WhereBuilder};
+use crate::catalog::tables::active_queries;
 use crate::catalog::tables::table;
-use crate::catalog::tables::{queries, workers};
 use crate::catalog::worker::endpoint::{HostName, NetworkAddr};
-use crate::errors::CoordinatorErr;
 use crate::request::Request;
 use sqlx::sqlite::SqliteArguments;
-use strum::{Display, EnumIter};
+use strum::{Display, EnumIter, EnumString};
 use uuid::Uuid;
+use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, sqlx::Type, Display)]
 pub enum StopMode {
@@ -25,7 +26,7 @@ impl From<StopMode> for i32 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, sqlx::Type, Display, EnumIter)]
+#[derive(Clone, Copy, Debug, PartialEq, sqlx::Type, Display, EnumIter, EnumString)]
 pub enum QueryState {
     Pending,     // Query was (partially) submitted/started
     Deploying,   // Query is in the deployment process
@@ -36,17 +37,54 @@ pub enum QueryState {
     Failed,      // Query failed
 }
 
-#[derive(Clone, Debug, PartialEq, sqlx::Type, Display, EnumIter)]
+impl From<String> for QueryState {
+    fn from(s: String) -> Self {
+        QueryState::from_str(&s).unwrap_or(QueryState::Failed)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, sqlx::Type, Display, EnumIter, EnumString)]
 pub enum FragmentState {
     Pending,
-    Registering,
     Registered,
-    Starting,
     Started,
     Running,
     Completed,
     Stopped,
     Failed,
+}
+
+impl From<Vec<FragmentState>> for QueryState {
+    fn from(states: Vec<FragmentState>) -> Self {
+        states
+            .contains(&FragmentState::Failed)
+            .then_some(QueryState::Failed)
+            .or_else(|| {
+                states
+                    .iter()
+                    .all(|s| *s == FragmentState::Stopped)
+                    .then_some(QueryState::Stopped)
+            })
+            .or_else(|| {
+                states
+                    .iter()
+                    .all(|s| *s == FragmentState::Completed)
+                    .then_some(QueryState::Completed)
+            })
+            .or_else(|| {
+                states
+                    .iter()
+                    .all(|s| *s == FragmentState::Running)
+                    .then_some(QueryState::Running)
+            })
+            .or_else(|| {
+                states
+                    .iter()
+                    .all(|s| *s == FragmentState::Pending)
+                    .then_some(QueryState::Pending)
+            })
+            .unwrap_or(QueryState::Deploying)
+    }
 }
 
 pub type QueryId = String;
@@ -63,12 +101,30 @@ pub struct Fragment {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub struct Query {
+pub struct ActiveQuery {
     pub id: QueryId,
-    pub stmt: String,
+    pub statement: String,
     pub current_state: QueryState,
     pub desired_state: QueryState,
-    pub submission_timestamp: String,
+    pub stop_mode: Option<StopMode>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, PartialEq)]
+pub struct QueryLogEntry {
+    pub query_id: QueryId,
+    pub statement: String,
+    pub current_state: QueryState,
+    pub desired_state: QueryState,
+    pub timestamp: chrono::NaiveDateTime,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TerminatedQuery {
+    pub id: Option<QueryId>,
+    pub statement: String,
+    pub termination_state: QueryState,
+    pub error: Option<String>,
+    pub stack_trace: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -77,7 +133,7 @@ pub struct CreateQuery {
     pub stmt: String,
     pub on_workers: Vec<NetworkAddr>,
 }
-pub type CreateQueryRequest = Request<CreateQuery, Result<(), CoordinatorErr>>;
+pub type CreateQueryRequest = Request<CreateQuery, Result<(), CatalogErr>>;
 
 impl CreateQuery {
     pub fn new(stmt: String, on_workers: Vec<NetworkAddr>) -> Self {
@@ -101,17 +157,17 @@ pub struct DropQuery {
     pub on_worker: Option<NetworkAddr>,
     pub stop_mode: Option<StopMode>,
 }
-pub type DropQueryRequest = Request<DropQuery, Result<(), CoordinatorErr>>;
+pub type DropQueryRequest = Request<DropQuery, Result<(), CatalogErr>>;
 
 impl ToSql for DropQuery {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {
-        UpdateBuilder::on_table(table::QUERIES)
-            .set(queries::DESIRED_STATE, QueryState::Stopped)
+        UpdateBuilder::on_table(table::ACTIVE_QUERIES)
+            .set(active_queries::DESIRED_STATE, QueryState::Stopped)
             .add_where()
-            .eq(queries::ID, self.with_id.clone())
-            .eq(queries::CURRENT_STATE, self.with_current_state)
-            .eq(queries::DESIRED_STATE, self.with_desired_state)
-            .eq(queries::STOP_MODE, self.stop_mode)
+            .eq(active_queries::ID, self.with_id.clone())
+            .eq(active_queries::CURRENT_STATE, self.with_current_state)
+            .eq(active_queries::DESIRED_STATE, self.with_desired_state)
+            .eq(active_queries::STOP_MODE, self.stop_mode)
             .into_parts()
     }
 }
@@ -122,7 +178,7 @@ pub struct GetQuery {
     pub with_current_state: Option<QueryState>,
     pub with_desired_state: Option<QueryState>,
 }
-pub type GetQueryRequest = Request<GetQuery, Result<Vec<Query>, CoordinatorErr>>;
+pub type GetQueryRequest = Request<GetQuery, Result<Vec<ActiveQuery>, CatalogErr>>;
 
 impl GetQuery {
     pub fn new() -> Self {
@@ -147,10 +203,10 @@ impl GetQuery {
 
 impl ToSql for GetQuery {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {
-        WhereBuilder::from(SqlOperation::Select(table::QUERIES))
-            .eq(workers::HOST_NAME, self.with_id.clone())
-            .eq(workers::CURRENT_STATE, self.with_current_state)
-            .eq(workers::DESIRED_STATE, self.with_desired_state)
+        WhereBuilder::from(SqlOperation::Select(table::ACTIVE_QUERIES))
+            .eq(active_queries::ID, self.with_id.clone())
+            .eq(active_queries::CURRENT_STATE, self.with_current_state)
+            .eq(active_queries::DESIRED_STATE, self.with_desired_state)
             .into_parts()
     }
 }
@@ -163,10 +219,10 @@ pub struct MarkQuery {
 
 impl ToSql for MarkQuery {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {
-        UpdateBuilder::on_table(table::QUERIES)
-            .set(queries::CURRENT_STATE, self.new_current)
+        UpdateBuilder::on_table(table::ACTIVE_QUERIES)
+            .set(active_queries::CURRENT_STATE, self.new_current)
             .add_where()
-            .eq(queries::ID, Some(self.id.clone()))
+            .eq(active_queries::ID, Some(self.id.clone()))
             .into_parts()
     }
 }

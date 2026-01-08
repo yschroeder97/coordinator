@@ -7,8 +7,8 @@ pub struct CoordinatorReceiver<Req> {
 }
 
 impl<Req: Send + Sync + 'static> CoordinatorReceiver<Req> {
-    pub(crate) fn recv(&mut self) -> Option<Req> {
-        self.receiver.recv().ok()
+    pub(crate) async fn recv(&mut self) -> Option<Req> {
+        self.receiver.recv_async().await.ok()
     }
 }
 

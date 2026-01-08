@@ -7,10 +7,22 @@ CREATE TABLE IF NOT EXISTS workers
     current_state TEXT    NOT NULL DEFAULT 'Pending',
     desired_state TEXT    NOT NULL DEFAULT 'Active',
     PRIMARY KEY (host_name, grpc_port),
-    FOREIGN KEY (current_state) REFERENCES worker_states (state),
-    FOREIGN KEY (desired_state) REFERENCES worker_states (state),
+    FOREIGN KEY (current_state) REFERENCES worker_states (state) ON DELETE CASCADE,
+    FOREIGN KEY (desired_state) REFERENCES worker_states (state) ON DELETE CASCADE,
     CHECK (grpc_port != data_port),
     CHECK (desired_state IN ('Active', 'Removed'))
+);
+
+CREATE TABLE IF NOT EXISTS worker_changelog
+(
+    host_name     TEXT     NOT NULL,
+    grpc_port     INTEGER  NOT NULL,
+    timestamp     DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
+    capacity      INTEGER  NOT NULL CHECK (capacity >= 0),
+    current_state TEXT     NOT NULL,
+    desired_state TEXT     NOT NULL,
+    FOREIGN KEY (current_state) REFERENCES worker_states (state),
+    FOREIGN KEY (desired_state) REFERENCES worker_states (state)
 );
 
 CREATE TABLE IF NOT EXISTS worker_states
@@ -67,31 +79,39 @@ CREATE TABLE IF NOT EXISTS query_stop_modes
     mode TEXT PRIMARY KEY NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS queries
+CREATE TABLE IF NOT EXISTS active_queries
 (
-    id                   TEXT PRIMARY KEY,
-    statement            TEXT     NOT NULL,
-    current_state        TEXT     NOT NULL DEFAULT 'Pending',
-    desired_state        TEXT     NOT NULL DEFAULT 'Running',
-    stop_mode            TEXT              DEFAULT NULL,
-    submission_timestamp DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
+    id            TEXT PRIMARY KEY,
+    statement     TEXT NOT NULL,
+    current_state TEXT NOT NULL DEFAULT 'Pending',
+    desired_state TEXT NOT NULL DEFAULT 'Running',
+    stop_mode     TEXT          DEFAULT NULL,
     FOREIGN KEY (current_state) REFERENCES query_states (state),
     FOREIGN KEY (desired_state) REFERENCES query_states (state),
     CHECK (desired_state IN ('Running', 'Stopped')),
     CHECK (stop_mode IN (NULL, 'Graceful', 'Forceful'))
 );
 
-CREATE TABLE IF NOT EXISTS query_log
+CREATE TABLE IF NOT EXISTS terminated_queries
 (
-    id                    TEXT PRIMARY KEY,
-    statement             TEXT     NOT NULL,
-    termination_state     TEXT     NOT NULL DEFAULT 'Completed',
-    submission_timestamp  DATETIME NOT NULL,
-    termination_timestamp DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
-    error                 TEXT              DEFAULT NULL,
+    id                TEXT,
+    statement         TEXT NOT NULL,
+    termination_state TEXT NOT NULL DEFAULT 'Completed',
+    error             TEXT          DEFAULT NULL,
+    stack_trace       TEXT          DEFAULT NULL,
     FOREIGN KEY (termination_state) REFERENCES query_states (state),
-    CHECK (termination_state IN ('Completed', 'Stopped', 'Failed')),
-    CHECK (submission_timestamp < termination_timestamp)
+    CHECK (termination_state IN ('Stopped', 'Completed', 'Failed'))
+);
+
+CREATE TABLE IF NOT EXISTS query_changelog
+(
+    query_id      TEXT     NOT NULL,
+    statement     TEXT     NOT NULL,
+    timestamp     DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
+    current_state TEXT     NOT NULL,
+    desired_state TEXT     NOT NULL,
+    FOREIGN KEY (current_state) REFERENCES query_states (state),
+    FOREIGN KEY (desired_state) REFERENCES query_states (state)
 );
 
 CREATE TABLE IF NOT EXISTS deployed_sources
@@ -99,7 +119,7 @@ CREATE TABLE IF NOT EXISTS deployed_sources
     query_id           TEXT    NOT NULL,
     physical_source_id INTEGER NOT NULL,
     PRIMARY KEY (query_id, physical_source_id),
-    FOREIGN KEY (query_id) REFERENCES queries (id) ON DELETE CASCADE,
+    FOREIGN KEY (query_id) REFERENCES active_queries (id) ON DELETE CASCADE,
     FOREIGN KEY (physical_source_id) REFERENCES physical_sources (id) ON DELETE RESTRICT
 );
 
@@ -117,7 +137,7 @@ CREATE TABLE IF NOT EXISTS query_fragments
     desired_state TEXT    NOT NULL DEFAULT 'Running',
     plan          JSON    NOT NULL,
     PRIMARY KEY (query_id, host_name, grpc_port),
-    FOREIGN KEY (query_id) REFERENCES queries (id) ON DELETE RESTRICT,
+    FOREIGN KEY (query_id) REFERENCES active_queries (id) ON DELETE RESTRICT,
     FOREIGN KEY (host_name, grpc_port) REFERENCES workers (host_name, grpc_port) ON DELETE RESTRICT,
     FOREIGN KEY (current_state) REFERENCES query_fragment_states (state),
     FOREIGN KEY (desired_state) REFERENCES query_fragment_states (state),
@@ -129,6 +149,6 @@ CREATE TABLE IF NOT EXISTS deployed_sinks
     query_id  TEXT NOT NULL,
     sink_name TEXT NOT NULL,
     PRIMARY KEY (query_id, sink_name),
-    FOREIGN KEY (query_id) REFERENCES queries (id) ON DELETE CASCADE,
+    FOREIGN KEY (query_id) REFERENCES active_queries (id) ON DELETE CASCADE,
     FOREIGN KEY (sink_name) REFERENCES sinks (name) ON DELETE RESTRICT
 );

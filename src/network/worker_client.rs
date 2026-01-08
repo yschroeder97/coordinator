@@ -12,28 +12,28 @@ use thiserror::Error;
 use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
 use tokio_retry2::{Retry, RetryError};
 use tonic::transport::{Channel, Endpoint};
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 mod worker_rpc_service {
     tonic::include_proto!("worker_rpc");
 }
 
 #[derive(Error, Debug)]
-pub(crate) enum ConnErr {
+pub(crate) enum WorkerClientErr {
     #[error("Failed to connect to {1}: {0}")]
-    Failed(tonic::transport::Error, GrpcAddr),
+    Connection(tonic::transport::Error, GrpcAddr),
+
+    #[error("gRPC error at '{0}'")]
+    GrpcError(GrpcAddr),
 }
 
-#[derive(Error, Debug)]
-pub(crate) enum WorkerClientError {
-    #[error(transparent)]
-    Connection(#[from] ConnErr),
-
-    #[error("gRPC error: {0}")]
-    GrpcError(#[from] tonic::Status),
-
-    #[error("Internal error: {0}")]
-    InternalError(String),
+impl WorkerClientErr {
+    pub fn addr(&self) -> &GrpcAddr {
+        match self {
+            WorkerClientErr::Connection(_, addr) => addr,
+            WorkerClientErr::GrpcError(addr) => addr,
+        }
+    }
 }
 
 // Wrapper types to avoid conflicting implementations
@@ -44,15 +44,13 @@ pub struct StartFragmentPayload(pub FragmentId);
 pub struct UnregisterFragmentPayload(pub FragmentId);
 
 // Request type aliases for worker RPCs
-pub type RegisterFragmentRequest =
-    Request<FragmentId, Result<RegisterQueryReply, WorkerClientError>>;
-pub type StartFragmentRequest = Request<StartFragmentPayload, Result<(), WorkerClientError>>;
-pub type StopFragmentRequest = Request<(FragmentId, StopMode), Result<(), WorkerClientError>>;
+pub type RegisterFragmentRequest = Request<FragmentId, Result<RegisterQueryReply, WorkerClientErr>>;
+pub type StartFragmentRequest = Request<StartFragmentPayload, Result<(), WorkerClientErr>>;
+pub type StopFragmentRequest = Request<(FragmentId, StopMode), Result<(), WorkerClientErr>>;
 pub type UnregisterFragmentRequest =
-    Request<UnregisterFragmentPayload, Result<(), WorkerClientError>>;
-pub type GetFragmentStatusRequest =
-    Request<FragmentId, Result<QueryStatusReply, WorkerClientError>>;
-pub type GetWorkerStatusRequest = Request<(), Result<WorkerStatusResponse, WorkerClientError>>;
+    Request<UnregisterFragmentPayload, Result<(), WorkerClientErr>>;
+pub type GetFragmentStatusRequest = Request<FragmentId, Result<QueryStatusReply, WorkerClientErr>>;
+pub type GetWorkerStatusRequest = Request<(), Result<WorkerStatusResponse, WorkerClientErr>>;
 
 pub(crate) enum Rpc {
     RegisterFragment(RegisterFragmentRequest),
@@ -90,20 +88,21 @@ impl WorkerClient {
     #[instrument(fields(grpc_addr = %grpc_addr))]
     pub async fn connect(
         grpc_addr: GrpcAddr,
-    ) -> Result<(flume::Sender<Rpc>, WorkerClient), ConnErr> {
+    ) -> Result<(flume::Sender<Rpc>, WorkerClient), WorkerClientErr> {
         info!("Attempting to connect");
         const INITIAL_BACKOFF_MS: u64 = 1000;
         const BACKOFF_FACTOR: f64 = 2.0;
-        const MAX_DELAY: Duration = Duration::from_secs(60);
+        const MAX_RETRIES: usize = 6;
 
         let connect_retry =
             ExponentialFactorBackoff::from_millis(INITIAL_BACKOFF_MS, BACKOFF_FACTOR)
-                .max_delay(MAX_DELAY)
-                .map(jitter);
+                .map(jitter)
+                .take(MAX_RETRIES);
 
         let channel = Retry::spawn(connect_retry, || async {
-            let endpoint = Endpoint::from_shared(format!("http://{}", grpc_addr))
-                .map_err(|e| RetryError::permanent(ConnErr::Failed(e, grpc_addr.clone())))?;
+            let endpoint = Endpoint::from_shared(format!("http://{}", grpc_addr)).map_err(|e| {
+                RetryError::permanent(WorkerClientErr::Connection(e, grpc_addr.clone()))
+            })?;
 
             endpoint
                 .http2_keep_alive_interval(Duration::from_secs(
@@ -115,7 +114,7 @@ impl WorkerClient {
                 .await
                 .map_err(|e| {
                     info!("Retrying connection establishment");
-                    RetryError::transient(ConnErr::Failed(e, grpc_addr.clone()))
+                    RetryError::transient(WorkerClientErr::Connection(e, grpc_addr.clone()))
                 })
         })
         .await?;
@@ -134,115 +133,119 @@ impl WorkerClient {
 
     #[instrument(fields(grpc_addr = %self.grpc_addr))]
     pub async fn run(self) -> () {
+        macro_rules! dispatch {
+            ($client:expr, $tx:expr, $method:ident, $req:expr) => {
+                let addr = self.grpc_addr.clone();
+                tokio::spawn(async move {
+                    let res = $client.$method($req).await;
+                    reply_to(
+                        $tx,
+                        res.map(|resp| resp.into_inner())
+                            .map_err(|_| WorkerClientErr::GrpcError(addr)),
+                    );
+                });
+            };
+            ($client:expr, $tx:expr, $method:ident, $req:expr, unit) => {
+                let addr = self.grpc_addr.clone();
+                tokio::spawn(async move {
+                    let res = $client.$method($req).await;
+                    reply_to(
+                        $tx,
+                        res.map(|_| ())
+                            .map_err(|_| WorkerClientErr::GrpcError(addr)),
+                    );
+                });
+            };
+        }
+
         while let Ok(rpc) = self.rpc_listener.recv_async().await {
-            // Since recv is called sequentially, we want to avoid blocking requests by awaiting the responses
-            // Instead, we clone the client (cheap) and handle the RPC in a background task
+            let mut client = self.client.clone();
             match rpc {
-                Rpc::RegisterFragment(req) => {
-                    tokio::spawn(register_fragment(self.client.clone(), req));
+                Rpc::RegisterFragment(Request {
+                    payload: id,
+                    reply_to: tx,
+                }) => {
+                    dispatch!(
+                        client,
+                        tx,
+                        register_query,
+                        RegisterQueryRequest { query_id: id }
+                    );
                 }
-                Rpc::StartFragment(req) => {
-                    tokio::spawn(start_fragment(self.client.clone(), req));
+                Rpc::StartFragment(Request {
+                    payload: StartFragmentPayload(id),
+                    reply_to: tx,
+                }) => {
+                    dispatch!(
+                        client,
+                        tx,
+                        start_query,
+                        StartQueryRequest { query_id: id },
+                        unit
+                    );
                 }
-                Rpc::StopFragment(req) => {
-                    tokio::spawn(stop_fragment(self.client.clone(), req));
+                Rpc::StopFragment(Request {
+                    payload: (id, stop_mode),
+                    reply_to: tx,
+                }) => {
+                    dispatch!(
+                        client,
+                        tx,
+                        stop_query,
+                        StopQueryRequest {
+                            query_id: id,
+                            termination_type: stop_mode.into(),
+                        },
+                        unit
+                    );
                 }
-                Rpc::UnregisterFragment(req) => {
-                    tokio::spawn(unregister_fragment(self.client.clone(), req));
+                Rpc::UnregisterFragment(Request {
+                    payload: UnregisterFragmentPayload(id),
+                    reply_to: tx,
+                }) => {
+                    dispatch!(
+                        client,
+                        tx,
+                        unregister_query,
+                        UnregisterQueryRequest { query_id: id },
+                        unit
+                    );
                 }
-                Rpc::GetFragmentStatus(req) => {
-                    tokio::spawn(get_fragment_status(self.client.clone(), req));
+                Rpc::GetFragmentStatus(Request {
+                    payload: id,
+                    reply_to: tx,
+                }) => {
+                    dispatch!(
+                        client,
+                        tx,
+                        request_query_status,
+                        QueryStatusRequest { query_id: id }
+                    );
                 }
-                Rpc::GetWorkerStatus(req) => {
-                    tokio::spawn(get_worker_status(self.client.clone(), req));
+                Rpc::GetWorkerStatus(Request {
+                    payload: (),
+                    reply_to: tx,
+                }) => {
+                    dispatch!(
+                        client,
+                        tx,
+                        request_status,
+                        WorkerStatusRequest {
+                            after_unix_timestamp_in_ms: 0
+                        }
+                    );
                 }
             }
         }
     }
 }
 
-async fn register_fragment(
-    mut client: WorkerRpcServiceClient<Channel>,
-    req: RegisterFragmentRequest,
-) {
-    let result = client
-        .register_query(RegisterQueryRequest {
-            query_id: req.payload,
-        })
-        .await
-        .map(|response| response.into_inner())
-        .map_err(WorkerClientError::from);
-
-    let _ = req.reply(result);
-}
-
-async fn start_fragment(mut client: WorkerRpcServiceClient<Channel>, req: StartFragmentRequest) {
-    let result = client
-        .start_query(StartQueryRequest {
-            query_id: req.payload.0,
-        })
-        .await
-        .map(|_| ())
-        .map_err(WorkerClientError::from);
-
-    let _ = req.reply(result);
-}
-
-async fn stop_fragment(mut client: WorkerRpcServiceClient<Channel>, req: StopFragmentRequest) {
-    let (id, stop_mode) = req.payload.clone();
-    let result = client
-        .stop_query(StopQueryRequest {
-            query_id: id,
-            termination_type: stop_mode.into(),
-        })
-        .await
-        .map(|_| ())
-        .map_err(WorkerClientError::from);
-
-    let _ = req.reply(result);
-}
-
-async fn unregister_fragment(
-    mut client: WorkerRpcServiceClient<Channel>,
-    req: UnregisterFragmentRequest,
-) {
-    let result = client
-        .unregister_query(UnregisterQueryRequest {
-            query_id: req.payload.0,
-        })
-        .await
-        .map(|_| ())
-        .map_err(WorkerClientError::from);
-
-    let _ = req.reply(result);
-}
-
-async fn get_fragment_status(
-    mut client: WorkerRpcServiceClient<Channel>,
-    req: GetFragmentStatusRequest,
-) {
-    let result = client
-        .request_query_status(QueryStatusRequest {
-            query_id: req.payload,
-        })
-        .await
-        .map(|response| response.into_inner())
-        .map_err(WorkerClientError::from);
-
-    let _ = req.reply(result);
-}
-
-async fn get_worker_status(
-    mut client: WorkerRpcServiceClient<Channel>,
-    req: GetWorkerStatusRequest,
-) {
-    let result = client
-        .request_status(WorkerStatusRequest {
-            after_unix_timestamp_in_ms: 0,
-        })
-        .await
-        .map(|response| response.into_inner())
-        .map_err(WorkerClientError::from);
-
-    let _ = req.reply(result);
+fn reply_to<R, E>(tx: tokio::sync::oneshot::Sender<Result<R, WorkerClientErr>>, res: Result<R, E>)
+where
+    E: Into<WorkerClientErr>,
+{
+    let res = res.map_err(|e| e.into());
+    if tx.send(res).is_err() {
+        warn!("Requesting task dropped the receiver channel");
+    }
 }

@@ -2,12 +2,12 @@ use super::logical_source::LogicalSourceName;
 use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
 use crate::catalog::tables::{physical_sources, table};
 use crate::catalog::worker::endpoint::{HostName, NetworkAddr};
-use crate::errors::CoordinatorErr;
 use crate::request::Request;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteArguments;
 use std::collections::HashMap;
 use strum::EnumIter;
+use crate::catalog::catalog_errors::CatalogErr;
 
 pub type PhysicalSourceId = i64;
 
@@ -49,7 +49,7 @@ pub struct CreatePhysicalSource {
     pub source_config: HashMap<String, String>,
     pub parser_config: HashMap<String, String>,
 }
-pub type CreatePhysicalSourceRequest = Request<CreatePhysicalSource, Result<(), CoordinatorErr>>;
+pub type CreatePhysicalSourceRequest = Request<CreatePhysicalSource, Result<(), CatalogErr>>;
 
 #[derive(Clone, Debug)]
 pub struct DropPhysicalSource {
@@ -58,7 +58,7 @@ pub struct DropPhysicalSource {
     pub with_type: Option<SourceType>,
 }
 pub type DropPhysicalSourceRequest =
-    Request<DropPhysicalSource, Result<Vec<PhysicalSource>, CoordinatorErr>>;
+    Request<DropPhysicalSource, Result<Vec<PhysicalSource>, CatalogErr>>;
 
 impl ToSql for DropPhysicalSource {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {
@@ -87,7 +87,7 @@ pub struct GetPhysicalSource {
     pub with_type: Option<SourceType>,
 }
 pub type GetPhysicalSourceRequest =
-Request<GetPhysicalSource, Result<Vec<PhysicalSource>, CoordinatorErr>>;
+Request<GetPhysicalSource, Result<Vec<PhysicalSource>, CatalogErr>>;
 
 impl ToSql for GetPhysicalSource {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {

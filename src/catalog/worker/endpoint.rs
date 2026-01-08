@@ -1,6 +1,7 @@
 use std::fmt;
 use std::fmt::Formatter;
 use std::net::SocketAddr;
+use std::str::FromStr;
 
 pub type HostName = String;
 pub type HostAddr = NetworkAddr;
@@ -39,6 +40,20 @@ impl From<&SocketAddr> for NetworkAddr {
 impl From<SocketAddr> for NetworkAddr {
     fn from(value: SocketAddr) -> Self {
         NetworkAddr::new(value.ip().to_string(), value.port())
+    }
+}
+
+impl From<&str> for NetworkAddr {
+    fn from(value: &str) -> Self {
+        let sock_addr = SocketAddr::from_str(value).unwrap();
+        sock_addr.into()
+    }
+}
+
+impl From<String> for NetworkAddr {
+    fn from(value: String) -> Self {
+        let sock_addr = SocketAddr::from_str(value.as_str()).unwrap();
+        sock_addr.into()
     }
 }
 

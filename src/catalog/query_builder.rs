@@ -19,7 +19,7 @@ pub enum SqlOperation {
 impl Display for SqlOperation {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            SqlOperation::Select(tbl) => write!(f, "SELECT FROM {tbl}"),
+            SqlOperation::Select(tbl) => write!(f, "SELECT * FROM {tbl}"),
             SqlOperation::Delete(tbl) => write!(f, "DELETE FROM {tbl}"),
             SqlOperation::Update(tbl) => write!(f, "UPDATE {tbl} SET"),
         }
@@ -182,6 +182,25 @@ impl WhereBuilder {
         self.and_if(column, "=", value)
     }
 
+    /// Adds an inequality condition (`column != value`) if value is `Some`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use coordinator::catalog::query_builder::{WhereBuilder, SqlOperation};
+    ///
+    /// let query = WhereBuilder::from(SqlOperation::Select("users"))
+    ///     .neq("status", Some("active"))
+    ///     .into_parts();
+    /// // Generates: SELECT FROM users WHERE status != ?
+    /// ```
+    pub fn neq<T>(self, column: &str, value: Option<T>) -> Self
+    where
+        T: Send + sqlx::Type<Sqlite> + sqlx::Encode<'static, Sqlite> + 'static,
+    {
+        self.and_if(column, "!=", value)
+    }
+
     /// Returns the generated SQL string for debugging purposes.
     ///
     /// This is useful for inspecting the generated query without executing it.
@@ -283,7 +302,7 @@ mod tests {
     fn where_builder_no_where() {
         let sql = WhereBuilder::from(SqlOperation::Select("table")).to_sql();
 
-        assert_eq!(sql, "SELECT FROM table");
+        assert_eq!(sql, "SELECT * FROM table");
     }
 
     #[test]
@@ -292,7 +311,7 @@ mod tests {
             .eq::<String>("col1", Some("value".into()))
             .to_sql();
 
-        assert_eq!(sql, "SELECT FROM table WHERE col1 = ?");
+        assert_eq!(sql, "SELECT * FROM table WHERE col1 = ?");
     }
 
     #[test]
@@ -302,7 +321,7 @@ mod tests {
             .eq::<String>("col2", Some("another".into()))
             .to_sql();
 
-        assert_eq!(sql, "SELECT FROM table WHERE col1 = ? AND col2 = ?");
+        assert_eq!(sql, "SELECT * FROM table WHERE col1 = ? AND col2 = ?");
     }
 
     #[test]

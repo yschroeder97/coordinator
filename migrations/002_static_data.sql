@@ -9,9 +9,7 @@ VALUES ('Pending'),
 
 INSERT INTO query_fragment_states (state)
 VALUES ('Pending'),
-       ('Registering'),
        ('Registered'),
-       ('Starting'),
        ('Started'),
        ('Running'),
        ('Completed'),

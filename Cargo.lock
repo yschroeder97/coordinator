@@ -244,7 +244,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "145052bdd345b87320e369255277e3fb5152762ad123a901ef5c262dd38fe8d2"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
+ "serde",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -267,6 +270,7 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 name = "coordinator"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "flume 0.12.0",
  "futures-util",
  "madsim",
@@ -1930,6 +1934,7 @@ dependencies = [
  "atoi",
  "byteorder",
  "bytes",
+ "chrono",
  "crc",
  "crossbeam-queue",
  "either",
@@ -2007,6 +2012,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "bytes",
+ "chrono",
  "crc",
  "digest",
  "dotenvy",
@@ -2047,6 +2053,7 @@ dependencies = [
  "base64",
  "bitflags",
  "byteorder",
+ "chrono",
  "crc",
  "dotenvy",
  "etcetera",
@@ -2081,6 +2088,7 @@ version = "0.8.2"
 source = "git+https://github.com/madsim-rs/sqlx.git?rev=3efe6d0065963db2a2b7f30dee69f647e28dec81#3efe6d0065963db2a2b7f30dee69f647e28dec81"
 dependencies = [
  "atoi",
+ "chrono",
  "flume 0.11.1",
  "futures-channel",
  "futures-core",
@@ -2122,23 +2130,22 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "strum"
-version = "0.26.3"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
+checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
 dependencies = [
  "strum_macros",
 ]
 
 [[package]]
 name = "strum_macros"
-version = "0.26.4"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
 dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "rustversion",
  "syn 2.0.111",
 ]
 

@@ -1,69 +1,97 @@
-use super::query::Query;
 use crate::catalog::notification::Notifier;
 use crate::catalog::query::query_catalog::QueryCatalog;
-use crate::catalog::query::{GetQuery, QueryId, QueryState};
-use crate::network::poly_join_set::JoinSet;
+use crate::catalog::query::{QueryId, QueryState, StopMode};
+use crate::controller::query_reconciler::QueryReconciler;
 use crate::network::worker_registry::WorkerRegistryHandle;
 use std::collections::HashMap;
 use std::sync::Arc;
-use thiserror::Error;
-use tracing::info;
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tracing::{error, info};
 
-#[derive(Error, Debug)]
-pub enum QueryServiceErr {}
+const QUERY_SERVICE_POLLING_DURATION: Duration = Duration::from_secs(5);
 
-pub(crate) struct QueryService<S: super::query::QueryState> {
-    catalog: Arc<QueryCatalog>,
+pub(crate) struct QueryService {
+    query_catalog: Arc<QueryCatalog>,
     worker_registry: WorkerRegistryHandle,
-    queries: HashMap<QueryId, Query<S>>,
-    deploying: JoinSet<()>,
-    terminating: JoinSet<()>,
+    tasks: HashMap<QueryId, (mpsc::Sender<StopMode>, JoinHandle<()>)>,
 }
 
-impl<S: super::query::QueryState> QueryService<S> {
-    pub fn new(catalog: Arc<QueryCatalog>, worker_registry: WorkerRegistryHandle) -> Self {
+impl QueryService {
+    pub(crate) fn new(catalog: Arc<QueryCatalog>, worker_registry: WorkerRegistryHandle) -> Self {
         QueryService {
-            catalog,
+            query_catalog: catalog,
             worker_registry,
-            queries: HashMap::default(),
-            deploying: JoinSet::new(),
-            terminating: JoinSet::new(),
+            tasks: HashMap::default(),
         }
     }
 
-    pub async fn run(&mut self) -> Result<(), QueryServiceErr> {
-        let mut queries = self.catalog.subscribe();
+    pub(crate) async fn run(&mut self) {
+        let mut active_queries = self.query_catalog.subscribe();
         info!("Starting");
+        self.reconcile().await;
 
         loop {
-            tokio::select! {
-                _ = queries.changed() => self.on_client_request().await,
+            if let Ok(result) =
+                tokio::time::timeout(QUERY_SERVICE_POLLING_DURATION, active_queries.changed()).await
+            {
+                result.expect("Query catalog notification channel closed unexpectedly")
             }
+            self.reconcile().await;
         }
     }
 
-    async fn on_client_request(&mut self) {
-        self.add_queries().await;
-        self.drop_queries().await;
-    }
+    async fn reconcile(&mut self) {
+        // 1. Fetch mismatches between the current state and desired state of queries from the catalog.
+        // We only care about queries present in the active_queries table.
+        let mismatched_queries = match self.query_catalog.get_mismatch().await {
+            Ok(queries) => queries,
+            Err(e) => {
+                error!("Failed to fetch active queries: {:?}", e);
+                return;
+            }
+        };
 
-    async fn add_queries(&mut self) {
-        let to_add = self
-            .catalog
-            .get_queries(&GetQuery::new().with_desired_state(QueryState::Running))
-            .await
-            .unwrap();
+        // 2. Clean up finished tasks
+        self.tasks.retain(|_, (_, handle)| !handle.is_finished());
 
-        for query in to_add {}
-    }
+        // 3. Reconcile
+        // Make sure each mismatch has a corresponding running task
+        for mismatch in mismatched_queries {
+            match self.tasks.get(&mismatch.id) {
+                // Mismatch has a task
+                Some((stop_controller, _)) => {
+                    // When there is a task, only stopping the query is a valid transition
+                    if mismatch.desired_state == QueryState::Stopped {
+                        stop_controller
+                            .send(
+                                mismatch.stop_mode.expect(
+                                    "BUG: if desired_state is Stopped, StopMode must be set",
+                                ),
+                            )
+                            .await
+                            .expect("Reconciler should be alive");
+                    } else {
+                        error!(
+                            "If a reconciliation task is running, only stopping the query is valid"
+                        );
+                    }
+                }
+                // Mismatch does not have a reconciliation task -> spawn one
+                None => {
+                    let (stop_controller, stop_listener) = mpsc::channel(1);
+                    let reconciler = QueryReconciler::new(
+                        mismatch.id.clone(),
+                        self.query_catalog.clone(),
+                        self.worker_registry.clone(),
+                        stop_listener,
+                    );
 
-    async fn drop_queries(&mut self) {
-        let to_drop = self
-            .catalog
-            .get_queries(&GetQuery::new().with_desired_state(QueryState::Stopped))
-            .await
-            .unwrap();
-
-        for query in to_drop {}
+                    let handle = tokio::spawn(reconciler.run());
+                    self.tasks.insert(mismatch.id, (stop_controller, handle));
+                }
+            }
+        }
     }
 }

@@ -4,6 +4,7 @@ use crate::catalog::database::{Database, DatabaseErr, TxnErr};
 use crate::catalog::notification::Notifier;
 use crate::catalog::query_builder::ToSql;
 use crate::catalog::tables::table;
+use sqlx::sqlite::SqliteArguments;
 use sqlx::QueryBuilder;
 use std::sync::Arc;
 use thiserror::Error;
@@ -61,10 +62,10 @@ impl WorkerCatalog {
             let query = sqlx::query(
                 "INSERT INTO workers (host_name, grpc_port, data_port, capacity) VALUES (?, ?, ?, ?)",
             )
-            .bind(&worker.host_name)
-            .bind(worker.grpc_port)
-            .bind(worker.data_port)
-            .bind(worker.capacity);
+                .bind(&worker.host_name)
+                .bind(worker.grpc_port)
+                .bind(worker.data_port)
+                .bind(worker.capacity);
 
             self.db.execute(query).await?;
         } else {
@@ -79,10 +80,10 @@ impl WorkerCatalog {
                         let worker_insert = sqlx::query(
                             "INSERT INTO workers (host_name, grpc_port, data_port, capacity) VALUES (?, ?, ?, ?)",
                         )
-                        .bind(&worker.host_name)
-                        .bind(worker.grpc_port)
-                        .bind(worker.data_port)
-                        .bind(worker.capacity);
+                            .bind(&worker.host_name)
+                            .bind(worker.grpc_port)
+                            .bind(worker.data_port)
+                            .bind(worker.capacity);
 
                         let mut builder = QueryBuilder::new(format!("INSERT INTO {}", table::NETWORK_LINKS));
                         let network_links_insert = builder
@@ -115,12 +116,33 @@ impl WorkerCatalog {
     }
 
     pub async fn delete_worker(&self, id: &GrpcAddr) -> Result<(), WorkerCatalogErr> {
+        // Note: This needs to be done in a txn, because the links are no FKs to the workers table
+        // We don't want to force users to insert the workers in an order that keeps FK constraints at all times
         self.db
-            .execute(sqlx::query!(
-                "DELETE FROM workers WHERE host_name = ? AND grpc_port = ?",
-                id.host,
-                id.port
-            ))
+            .txn(move |txn| {
+                let id = id.clone();
+
+                Box::pin(async move {
+                    let delete_worker = sqlx::query!(
+                        "DELETE FROM workers WHERE host_name = ? AND grpc_port = ?",
+                        id.host,
+                        id.port
+                    );
+
+                    let delete_links = sqlx::query!(
+                        "DELETE FROM network_links WHERE (src_host_name = ? AND src_grpc_port = ?) OR dst_host_name = ? AND dst_grpc_port = ?",
+                         id.host,
+                         id.port,
+                         id.host,
+                         id.port
+                    );
+
+                    delete_worker.execute(&mut **txn).await?;
+                    delete_links.execute(&mut **txn).await?;
+
+                    Ok(())
+                })
+            })
             .await?;
         Ok(())
     }
@@ -146,5 +168,83 @@ impl WorkerCatalog {
     ) -> Result<Vec<Worker>, WorkerCatalogErr> {
         let (sql, args) = get_worker.to_sql();
         self.db.select(&sql, args).await.map_err(Into::into)
+    }
+
+    pub async fn get_mismatch(&self) -> Result<Vec<Worker>, WorkerCatalogErr> {
+        self.db
+            .select(
+                "SELECT * FROM workers WHERE current_state != desired_state",
+                SqliteArguments::default(),
+            )
+            .await
+            .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::test_utils::{test_prop, CreatePhysicalSourceWithRefs, CreateSinkWithRefs};
+    use quickcheck_macros::quickcheck;
+
+    #[quickcheck]
+    fn worker_drop_with_physical_sources_fails(create_req: CreatePhysicalSourceWithRefs) -> bool {
+        test_prop(|catalog| async move {
+            catalog
+                .source
+                .create_logical_source(&create_req.create_logical)
+                .await
+                .expect("CreateLogicalSource should succeed");
+            catalog
+                .worker
+                .create_worker(&create_req.create_worker)
+                .await
+                .expect("CreateWorker should succeed");
+            catalog
+                .source
+                .create_physical_source(&create_req.create_physical)
+                .await
+                .expect("CreatePhysicalSource should succeed");
+
+            // Property: Cannot drop worker while physical sources reference it
+            let grpc_addr = GrpcAddr::new(
+                create_req.create_worker.host_name,
+                create_req.create_worker.grpc_port,
+            );
+
+            assert!(
+                catalog.worker.delete_worker(&grpc_addr).await.is_err(),
+                "Should not be able to drop worker '{}' while physical sources reference it",
+                grpc_addr,
+            );
+        })
+    }
+
+    #[quickcheck]
+    fn worker_drop_with_sinks_fails(create_req: CreateSinkWithRefs) -> bool {
+        test_prop(|catalog| async move {
+            catalog
+                .worker
+                .create_worker(&create_req.create_worker)
+                .await
+                .expect("CreateWorker should succeed");
+            catalog
+                .sink
+                .create_sink(&create_req.create_sink)
+                .await
+                .expect("CreateSink should succeed");
+
+            // Property: Cannot delete worker while sinks reference it
+            let grpc_addr = GrpcAddr::new(
+                create_req.create_worker.host_name,
+                create_req.create_worker.grpc_port,
+            );
+
+            assert!(
+                catalog.worker.delete_worker(&grpc_addr).await.is_err(),
+                "Should not be able to drop worker '{}' while sinks reference it",
+                grpc_addr
+            );
+        })
     }
 }

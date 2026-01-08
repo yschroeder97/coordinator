@@ -17,6 +17,7 @@ type FragmentId = u64;
 enum QueryFragmentState {
     #[default]
     Registered,
+    Started,
     Running,
     Stopped,
     Failed,
@@ -26,6 +27,7 @@ impl From<QueryFragmentState> for i32 {
     fn from(state: QueryFragmentState) -> i32 {
         match state {
             QueryFragmentState::Registered => 0,
+            QueryFragmentState::Started => 1,
             QueryFragmentState::Running => 2,
             QueryFragmentState::Stopped => 3,
             QueryFragmentState::Failed => 4,

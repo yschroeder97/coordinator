@@ -1,4 +1,2 @@
-mod query_service;
-mod query;
-mod running_query;
-mod terminating_query;
+pub(crate) mod query_service;
+mod query_reconciler;

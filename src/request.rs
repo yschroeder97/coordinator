@@ -19,7 +19,7 @@ impl<P: Debug, Rsp> Request<P, Rsp> {
             rx,
             Self {
                 payload,
-                reply_to: tx.clone(),
+                reply_to: tx,
             },
         )
     }

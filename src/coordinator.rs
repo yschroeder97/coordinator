@@ -11,7 +11,7 @@ use crate::catalog::source::physical_source::{
 };
 use crate::catalog::worker::{CreateWorkerRequest, DropWorkerRequest, GetWorkerRequest};
 use crate::catalog::Catalog;
-use crate::errors::CoordinatorErr;
+use crate::controller::query_service::QueryService;
 pub use crate::message_bus::{message_bus, CoordinatorHandle, CoordinatorReceiver};
 use crate::network::cluster_service::ClusterService;
 use tracing::debug;
@@ -55,9 +55,10 @@ macro_rules! dispatch {
             $(
                 CoordinatorRequest::$variant(req) => {
                     debug!("Received: {req:?}");
-                    let _ = req.respond(
-                        $catalog.$field.$method(&req.payload).await
-                            .map_err(|e| CoordinatorErr::from(CatalogErr::from(e)))
+                    let crate::request::Request { payload, reply_to } = req;
+                    let _ = reply_to.send(
+                        $catalog.$field.$method(&payload).await
+                        .map_err(Into::into)
                     );
                 }
             )*
@@ -125,18 +126,30 @@ pub fn start_coordinator(batch_size: Option<usize>) -> CoordinatorHandle<Coordin
             .expect("Failed to create Catalogs");
 
         let worker_catalog = catalog.worker_catalog();
-        rt.spawn(
-            async move {
-                let mut cluster_service = ClusterService::new(worker_catalog);
-                cluster_service.run().await
-            }
-            .instrument(info_span!("cluster_service")),
-        );
+        let mut cluster_service = ClusterService::new(worker_catalog);
+        let worker_registry = cluster_service.registry_handle();
+        rt.spawn(async move {
+            cluster_service
+                .run()
+                .instrument(info_span!("cluster_service"))
+                .await
+        });
 
-        rt.block_on(
-            async move { RequestListener::new(receiver, catalog).run().await }
-                .instrument(info_span!("request_listener")),
-        );
+        let query_catalog = catalog.query_catalog();
+        rt.spawn(async move {
+            QueryService::new(query_catalog, worker_registry)
+                .run()
+                .instrument(info_span!("query_service"))
+                .await
+        });
+
+        rt.block_on(async move {
+            RequestListener::new(receiver, catalog)
+                .run()
+                .instrument(info_span!("request_listener"))
+                .await
+        });
+
         rt.shutdown_background();
     });
 
@@ -150,22 +163,29 @@ pub async fn start_test_coordinator() -> CoordinatorHandle<CoordinatorRequest> {
     let catalog = Catalog::from_env().await.expect("Failed to create Catalog");
 
     let worker_catalog = catalog.worker_catalog();
+    let mut cluster_service = ClusterService::new(worker_catalog);
+    let worker_registry = cluster_service.registry_handle();
     tokio::spawn(async move {
-        let mut cluster_service = ClusterService::new(worker_catalog);
         cluster_service
             .run()
-            .await
             .instrument(info_span!("cluster_service"))
+            .await
     });
 
-    info!("Spawning RequestListener");
-    tokio::spawn(
-        async move {
-            info!("RequestListener task started");
-            RequestListener::new(receiver, catalog).run().await
-        }
-        .instrument(info_span!("request_listener")),
-    );
+    let query_catalog = catalog.query_catalog();
+    tokio::spawn(async move {
+        QueryService::new(query_catalog, worker_registry)
+            .run()
+            .instrument(info_span!("query_service"))
+            .await
+    });
+
+    tokio::spawn(async move {
+        RequestListener::new(receiver, catalog)
+            .run()
+            .instrument(info_span!("request_listener"))
+            .await
+    });
 
     handle
 }
@@ -181,7 +201,7 @@ impl RequestListener {
     }
 
     async fn run(mut self) -> () {
-        while let Some(msg) = self.receiver.recv() {
+        while let Some(msg) = self.receiver.recv().await {
             dispatch!(msg, self.catalog, {
                 CreateLogicalSource => source.create_logical_source,
                 CreatePhysicalSource => source.create_physical_source,
@@ -196,7 +216,7 @@ impl RequestListener {
                 GetLogicalSource => source.get_logical_source,
                 GetPhysicalSource => source.get_physical_sources,
                 GetSink => sink.get_sinks,
-                GetQuery => query.get_queries,
+                GetQuery => query.get_active_queries,
                 GetWorker => worker.get_workers,
             });
         }

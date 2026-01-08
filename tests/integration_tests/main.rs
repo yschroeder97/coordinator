@@ -1,3 +1,3 @@
 mod setup;
-mod test_coordinator;
+mod simulation;
 mod worker;

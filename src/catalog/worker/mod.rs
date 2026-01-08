@@ -1,11 +1,11 @@
-pub mod worker_catalog;
 pub mod endpoint;
+pub mod worker_catalog;
 
+use crate::catalog::catalog_errors::CatalogErr;
 use crate::catalog::query_builder::UpdateBuilder;
 use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
 use crate::catalog::tables::{table, workers};
 use crate::catalog::worker::endpoint::{GrpcAddr, HostAddr, HostName};
-use crate::errors::CoordinatorErr;
 use crate::request::Request;
 use sqlx::sqlite::SqliteArguments;
 use strum::{Display, EnumIter};
@@ -39,7 +39,7 @@ pub struct CreateWorker {
     pub capacity: u32,
     pub peers: Vec<HostAddr>,
 }
-pub type CreateWorkerRequest = Request<CreateWorker, Result<(), CoordinatorErr>>;
+pub type CreateWorkerRequest = Request<CreateWorker, Result<(), CatalogErr>>;
 
 #[derive(Debug, Clone)]
 pub struct DropWorker {
@@ -47,7 +47,7 @@ pub struct DropWorker {
     pub with_current_state: Option<WorkerState>,
     pub with_desired_state: Option<WorkerState>,
 }
-pub type DropWorkerRequest = Request<DropWorker, Result<(), CoordinatorErr>>;
+pub type DropWorkerRequest = Request<DropWorker, Result<(), CatalogErr>>;
 
 impl ToSql for DropWorker {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {
@@ -71,7 +71,7 @@ pub struct GetWorker {
     pub with_current_state: Option<WorkerState>,
     pub with_desired_state: Option<WorkerState>,
 }
-pub type GetWorkerRequest = Request<GetWorker, Result<Vec<Worker>, CoordinatorErr>>;
+pub type GetWorkerRequest = Request<GetWorker, Result<Vec<Worker>, CatalogErr>>;
 
 impl GetWorker {
     pub fn new() -> Self {

@@ -213,3 +213,132 @@ impl SourceCatalog {
         self.db.select(&stmt, args).await.map_err(|e| e.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::catalog::test_utils::{test_prop, CreatePhysicalSourceWithRefs};
+    use crate::catalog::source::logical_source::{CreateLogicalSource, DropLogicalSource};
+    use quickcheck_macros::quickcheck;
+
+    #[quickcheck]
+    fn logical_name_is_unique(create_source: CreateLogicalSource) -> bool {
+        test_prop(|catalog| async move {
+            catalog
+                .source
+                .create_logical_source(&create_source)
+                .await
+                .expect("First logical source creation should succeed");
+
+            assert!(
+                catalog
+                    .source
+                    .create_logical_source(&create_source)
+                    .await
+                    .is_err(),
+                "Duplicate logical source name '{}' should be rejected",
+                create_source.source_name
+            );
+        })
+    }
+
+    #[quickcheck]
+    fn physical_source_refs_exist(req: CreatePhysicalSourceWithRefs) -> bool {
+        test_prop(|catalog| async move {
+            assert!(
+                catalog
+                    .source
+                    .create_physical_source(&req.create_physical)
+                    .await
+                    .is_err(),
+                "Physical source with missing refs should be rejected",
+            );
+
+            catalog
+                .source
+                .create_logical_source(&req.create_logical)
+                .await
+                .expect("Logical source creation should succeed");
+
+            assert!(
+                catalog
+                    .source
+                    .create_physical_source(&req.create_physical)
+                    .await
+                    .is_err(),
+                "Physical source with missing worker ref should be rejected",
+            );
+
+            catalog
+                .worker
+                .create_worker(&req.create_worker)
+                .await
+                .expect("Worker creation should succeed");
+
+            catalog
+                .source
+                .create_physical_source(&req.create_physical)
+                .await
+                .expect("Physical source with valid refs should succeed");
+        })
+    }
+
+    #[quickcheck]
+    fn logical_source_drop_with_references_fails(create_req: CreatePhysicalSourceWithRefs) -> bool {
+        test_prop(|catalog| async move {
+            catalog
+                .source
+                .create_logical_source(&create_req.create_logical)
+                .await
+                .expect("CreateLogicalSource should succeed");
+            catalog
+                .worker
+                .create_worker(&create_req.create_worker)
+                .await
+                .expect("CreateWorker should succeed");
+            catalog
+                .source
+                .create_physical_source(&create_req.create_physical)
+                .await
+                .expect("CreatePhysicalSource should succeed");
+
+            // Property: Cannot drop logical source while physical sources reference it
+            let drop_request = DropLogicalSource {
+                source_name: Some(create_req.create_logical.source_name.clone()),
+            };
+
+            assert!(
+                catalog.source.drop_logical_source(&drop_request).await.is_err(),
+                "Should not be able to drop logical source '{}' while physical sources reference it",
+                create_req.create_logical.source_name
+            );
+        })
+    }
+
+    #[quickcheck]
+    fn create_drop_create_logical_source_succeeds(create_source: CreateLogicalSource) -> bool {
+        test_prop(|catalog| async move {
+            // Property: Create-Drop-Create sequence is idempotent
+            catalog
+                .source
+                .create_logical_source(&create_source)
+                .await
+                .expect("First create should succeed");
+
+            let drop_request = DropLogicalSource {
+                source_name: Some(create_source.source_name.clone()),
+            };
+
+            catalog
+                .source
+                .drop_logical_source(&drop_request)
+                .await
+                .expect("Drop should succeed");
+
+            catalog
+                .source
+                .create_logical_source(&create_source)
+                .await
+                .expect("Second create after drop should succeed");
+        })
+    }
+}

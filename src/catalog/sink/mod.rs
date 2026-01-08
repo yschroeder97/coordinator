@@ -3,12 +3,12 @@ pub mod sink_catalog;
 use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
 use crate::catalog::tables::{sinks, table};
 use crate::catalog::worker::endpoint::{HostName, NetworkAddr};
-use crate::errors::CoordinatorErr;
 use crate::request::Request;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteArguments;
 use std::collections::HashMap;
 use strum::EnumIter;
+use crate::catalog::catalog_errors::CatalogErr;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, sqlx::Type, EnumIter)]
 #[sqlx(type_name = "TEXT")]
@@ -46,7 +46,7 @@ pub struct CreateSink {
     pub sink_type: SinkType,
     pub config: HashMap<String, String>,
 }
-pub type CreateSinkRequest = Request<CreateSink, Result<(), CoordinatorErr>>;
+pub type CreateSinkRequest = Request<CreateSink, Result<(), CatalogErr>>;
 
 #[derive(Debug, Clone)]
 pub struct DropSink {
@@ -54,7 +54,7 @@ pub struct DropSink {
     pub on_worker: Option<NetworkAddr>,
     pub with_type: Option<SinkType>,
 }
-pub type DropSinkRequest = Request<DropSink, Result<Vec<Sink>, CoordinatorErr>>;
+pub type DropSinkRequest = Request<DropSink, Result<Vec<Sink>, CatalogErr>>;
 
 impl ToSql for DropSink {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {
@@ -79,7 +79,7 @@ pub struct GetSink {
     pub on_worker: Option<NetworkAddr>,
     pub with_type: Option<SinkType>,
 }
-pub type GetSinkRequest = Request<GetSink, Result<Vec<Sink>, CoordinatorErr>>;
+pub type GetSinkRequest = Request<GetSink, Result<Vec<Sink>, CatalogErr>>;
 
 impl ToSql for GetSink {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {
