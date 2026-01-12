@@ -63,54 +63,61 @@ impl SinkCatalog {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::catalog::test_utils::{test_prop, CreateSinkWithRefs};
-    use crate::catalog::worker::CreateWorker;
-    use quickcheck_macros::quickcheck;
+    use crate::catalog::test_utils::{arb_create_sink, test_prop, SinkWithRefs};
+    use crate::catalog::Catalog;
+    use proptest::prelude::*;
 
-    #[quickcheck]
-    fn sink_name_is_unique(req: CreateSinkWithRefs) -> bool {
-        test_prop(|catalog| async move {
-            catalog
-                .worker
-                .create_worker(&req.create_worker)
-                .await
-                .expect("Worker setup should succeed");
+    async fn prop_sink_name_unique(catalog: Catalog, create_sink: SinkWithRefs) {
+        catalog
+            .worker
+            .create_worker(&create_sink.worker)
+            .await
+            .expect("Worker creation should succeed");
 
-            catalog
-                .sink
-                .create_sink(&req.create_sink)
-                .await
-                .expect("First sink creation should succeed");
+        catalog
+            .sink
+            .create_sink(&create_sink.sink)
+            .await
+            .expect("First sink creation should succeed");
 
-            assert!(
-                catalog.sink.create_sink(&req.create_sink).await.is_err(),
-                "Duplicate sink name '{}' should be rejected",
-                req.create_sink.name
-            );
-        })
+        assert!(
+            catalog.sink.create_sink(&create_sink.sink).await.is_err(),
+            "Duplicate sink name '{}' should be rejected",
+            create_sink.sink.name
+        );
     }
 
-    #[quickcheck]
-    fn sink_worker_exists(create_worker: CreateWorker, mut create_sink: CreateSink) -> bool {
-        test_prop(|catalog| async move {
-            assert!(
-                catalog.sink.create_sink(&create_sink).await.is_err(),
-                "CreateSink without prior worker creation should be rejected"
-            );
+    async fn prop_sink_worker_exists(catalog: Catalog, create_sink: SinkWithRefs) {
+        assert!(
+            catalog.sink.create_sink(&create_sink.sink).await.is_err(),
+            "CreateSink without prior worker creation should be rejected"
+        );
 
-            create_sink.placement_host_name = create_worker.host_name.clone();
-            create_sink.placement_grpc_port = create_worker.grpc_port;
-            catalog
-                .worker
-                .create_worker(&create_worker)
-                .await
-                .expect("Worker setup should succeed");
-            catalog
-                .sink
-                .create_sink(&create_sink)
-                .await
-                .expect("CreateSink with valid worker ref should succeed");
-        })
+        catalog
+            .worker
+            .create_worker(&create_sink.worker)
+            .await
+            .expect("Worker setup should succeed");
+        catalog
+            .sink
+            .create_sink(&create_sink.sink)
+            .await
+            .expect("Sink creation with valid worker ref should succeed");
+    }
+
+    proptest! {
+        #[test]
+        fn sink_name_unique(req in arb_create_sink()) {
+            test_prop(|catalog| async move {
+                prop_sink_name_unique(catalog, req).await;
+            });
+        }
+
+        #[test]
+        fn sink_worker_exists(req in arb_create_sink()) {
+            test_prop(|catalog| async move {
+                prop_sink_worker_exists(catalog, req).await;
+            })
+        }
     }
 }

@@ -13,7 +13,7 @@ use worker_rpc_service::{
 };
 type FragmentId = u64;
 
-#[derive(Default, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 enum QueryFragmentState {
     #[default]
     Registered,

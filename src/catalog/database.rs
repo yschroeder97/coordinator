@@ -6,9 +6,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio_retry2::strategy::{jitter, FixedInterval};
-use tokio_retry2::{Retry, RetryError};
-use tracing::error;
+use tokio_retry::strategy::{jitter, FixedInterval};
+use tokio_retry::{Retry, RetryIf};
 
 const SQLITE_BUSY_CODE: &str = "5";
 const SQLITE_LOCKED_CODE: &str = "6";
@@ -18,7 +17,7 @@ pub struct Database {
 }
 
 #[derive(Error, Debug)]
-pub(crate) enum TxnErr {
+pub enum TxnErr {
     #[error("Failed txn: {0}")]
     Failed(sqlx::Error),
 }
@@ -38,20 +37,20 @@ pub enum DatabaseErr {
     Database(#[from] sqlx::Error),
 }
 
-pub fn should_retry(err: sqlx::Error) -> RetryError<TxnErr> {
-    match &err {
+pub fn should_retry(err: &sqlx::Error) -> bool {
+    match err {
         sqlx::Error::Database(db_err) => {
             if let Some(code) = db_err.code() {
                 if code == SQLITE_BUSY_CODE || code == SQLITE_LOCKED_CODE {
-                    RetryError::transient(TxnErr::Failed(err))
+                    true
                 } else {
-                    RetryError::permanent(TxnErr::Failed(err))
+                    false
                 }
             } else {
-                RetryError::permanent(TxnErr::Failed(err))
+                false
             }
         }
-        _ => RetryError::permanent(TxnErr::Failed(err)),
+        _ => false,
     }
 }
 
@@ -182,35 +181,42 @@ impl Database {
             &'c mut sqlx::Transaction<'_, Sqlite>,
         ) -> Pin<Box<dyn Future<Output = Result<T, sqlx::Error>> + Send + 'c>>,
     {
-        const TXN_RETRY_MILLIS: u64 = 50;
-
-        let strategy = FixedInterval::from_millis(TXN_RETRY_MILLIS)
-            .map(jitter)
-            .take(5);
-
         // Strategy: 5 retries after 50ms each
         // Action: Retry the txn
         // Condition: SQLite returned transient or permanent err
-        Retry::spawn(strategy, || async {
-            let mut tx = match self.pool.begin().await {
-                Ok(tx) => tx,
-                Err(e) => return Err(should_retry(e)),
-            };
+        RetryIf::spawn(
+            txn_retry_strategy(),
+            || async {
+                let mut tx = match self.pool.begin().await {
+                    Ok(tx) => tx,
+                    Err(e) => return Err(TxnErr::Failed(e)),
+                };
 
-            let result = action(&mut tx).await;
+                let result = action(&mut tx).await;
 
-            match result {
-                Ok(val) => match tx.commit().await {
-                    Ok(_) => Ok(val),
-                    Err(e) => Err(should_retry(e)),
-                },
-                Err(e) => Err(should_retry(e)),
-            }
-        })
+                match result {
+                    Ok(val) => match tx.commit().await {
+                        Ok(_) => Ok(val),
+                        Err(e) => Err(TxnErr::Failed(e)),
+                    },
+                    Err(e) => Err(TxnErr::Failed(e)),
+                }
+            },
+            |e: &TxnErr| match e {
+                TxnErr::Failed(sql_err) => should_retry(sql_err),
+            },
+        )
         .await
     }
-    
+
     pub fn pool(&self) -> SqlitePool {
         self.pool.clone()
     }
+}
+
+fn txn_retry_strategy() -> impl Iterator<Item = std::time::Duration> {
+    const TXN_RETRY_MILLIS: u64 = 50;
+    FixedInterval::from_millis(TXN_RETRY_MILLIS)
+        .map(jitter)
+        .take(5)
 }

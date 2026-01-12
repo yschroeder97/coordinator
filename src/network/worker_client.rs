@@ -9,8 +9,8 @@ use crate::network::worker_client::worker_rpc_service::{
 use crate::request::Request;
 use std::time::Duration;
 use thiserror::Error;
-use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
-use tokio_retry2::{Retry, RetryError};
+use tokio_retry::strategy::{jitter, ExponentialBackoff};
+use tokio_retry::Retry;
 use tonic::transport::{Channel, Endpoint};
 use tracing::{info, instrument, warn};
 
@@ -90,31 +90,23 @@ impl WorkerClient {
         grpc_addr: GrpcAddr,
     ) -> Result<(flume::Sender<Rpc>, WorkerClient), WorkerClientErr> {
         info!("Attempting to connect");
-        const INITIAL_BACKOFF_MS: u64 = 1000;
-        const BACKOFF_FACTOR: f64 = 2.0;
-        const MAX_RETRIES: usize = 6;
 
-        let connect_retry =
-            ExponentialFactorBackoff::from_millis(INITIAL_BACKOFF_MS, BACKOFF_FACTOR)
-                .map(jitter)
-                .take(MAX_RETRIES);
+        let endpoint = Endpoint::from_shared(format!("http://{}", grpc_addr)).map_err(|e| {
+            WorkerClientErr::Connection(e, grpc_addr.clone())
+        })?
+        .http2_keep_alive_interval(Duration::from_secs(
+            Self::ENDPOINT_KEEP_ALIVE_INTERVAL_SEC,
+        ))
+        .keep_alive_timeout(Duration::from_secs(Self::ENDPOINT_KEEP_ALIVE_TIMEOUT_SEC))
+        .connect_timeout(Duration::from_secs(5));
 
-        let channel = Retry::spawn(connect_retry, || async {
-            let endpoint = Endpoint::from_shared(format!("http://{}", grpc_addr)).map_err(|e| {
-                RetryError::permanent(WorkerClientErr::Connection(e, grpc_addr.clone()))
-            })?;
-
+        let channel = Retry::spawn(connect_retry_strategy(), || async {
             endpoint
-                .http2_keep_alive_interval(Duration::from_secs(
-                    Self::ENDPOINT_KEEP_ALIVE_INTERVAL_SEC,
-                ))
-                .keep_alive_timeout(Duration::from_secs(Self::ENDPOINT_KEEP_ALIVE_TIMEOUT_SEC))
-                .connect_timeout(Duration::from_secs(5))
                 .connect()
                 .await
                 .map_err(|e| {
                     info!("Retrying connection establishment");
-                    RetryError::transient(WorkerClientErr::Connection(e, grpc_addr.clone()))
+                    WorkerClientErr::Connection(e, grpc_addr.clone())
                 })
         })
         .await?;
@@ -238,6 +230,15 @@ impl WorkerClient {
             }
         }
     }
+}
+
+fn connect_retry_strategy() -> impl Iterator<Item = Duration> {
+    const INITIAL_BACKOFF_MS: u64 = 1000;
+    const MAX_RETRIES: usize = 6;
+
+    ExponentialBackoff::from_millis(INITIAL_BACKOFF_MS)
+        .map(jitter)
+        .take(MAX_RETRIES)
 }
 
 fn reply_to<R, E>(tx: tokio::sync::oneshot::Sender<Result<R, WorkerClientErr>>, res: Result<R, E>)

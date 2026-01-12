@@ -47,7 +47,7 @@ impl Catalog {
             reason: format!("DATABASE_URL not set: {}", e),
         })?;
 
-        let pool = sqlx::SqlitePool::connect(&database_url)
+        let pool = SqlitePool::connect(&database_url)
             .await
             .map_err(|e| CatalogErr::ConnectionError {
                 reason: e.to_string(),
@@ -62,7 +62,7 @@ impl Catalog {
         Ok(Self::from_db(db))
     }
 
-    pub async fn from_pool(pool: sqlx::SqlitePool) -> Result<Self, CatalogErr> {
+    pub async fn from_pool(pool: SqlitePool) -> Result<Self, CatalogErr> {
         let db = Database::from_pool(pool)
             .await
             .map_err(|e| CatalogErr::MigrationError {

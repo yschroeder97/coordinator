@@ -1,15 +1,18 @@
 pub mod sink_catalog;
 
+use crate::catalog::catalog_errors::CatalogErr;
 use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
 use crate::catalog::tables::{sinks, table};
 use crate::catalog::worker::endpoint::{HostName, NetworkAddr};
 use crate::request::Request;
+#[cfg(test)]
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteArguments;
 use std::collections::HashMap;
 use strum::EnumIter;
-use crate::catalog::catalog_errors::CatalogErr;
 
+#[cfg_attr(test, derive(Arbitrary))]
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, sqlx::Type, EnumIter)]
 #[sqlx(type_name = "TEXT")]
 pub enum SinkType {

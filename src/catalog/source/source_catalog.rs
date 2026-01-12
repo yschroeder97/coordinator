@@ -19,14 +19,16 @@ pub enum SourceCatalogErr {
     #[error("Logical source '{name}' not found")]
     LogicalSourceNotFound { name: LogicalSourceName },
 
-    #[error("Cannot delete logical source '{name}': referenced by {count} physical source(s). Delete these physical sources first: {physical_source_ids:?}")]
+    #[error("Cannot delete logical source '{name}': referenced by {count} physical source(s). Delete these physical sources first: {physical_source_ids:?}"
+    )]
     LogicalSourceReferencedByPhysical {
         name: LogicalSourceName,
         count: usize,
         physical_source_ids: Vec<i64>,
     },
 
-    #[error("Physical source with id {id} is referenced by {count} active query(s): {query_ids:?}. Stop or remove these queries first.")]
+    #[error("Physical source with id {id} is referenced by {count} active query(s): {query_ids:?}. Stop or remove these queries first."
+    )]
     PhysicalSourceReferencedByQueries {
         id: i64,
         count: usize,
@@ -40,12 +42,10 @@ pub enum SourceCatalogErr {
     },
 
     #[error("Worker '{host_name}:{grpc_port}' not found - cannot create physical source")]
-    WorkerNotFound {
-        host_name: HostName,
-        grpc_port: u16,
-    },
+    WorkerNotFound { host_name: HostName, grpc_port: u16 },
 
-    #[error("Physical source already exists on worker '{host_name}:{grpc_port}' for logical source '{logical_source}'")]
+    #[error("Physical source already exists on worker '{host_name}:{grpc_port}' for logical source '{logical_source}'"
+    )]
     PhysicalSourceAlreadyExists {
         logical_source: LogicalSourceName,
         host_name: HostName,
@@ -82,7 +82,9 @@ impl SourceCatalog {
         self.db.execute(query).await.map_err(|e| {
             // Check if this is a UNIQUE constraint violation on the primary key
             if let Some(constraint) = inspect_constraint(&e) {
-                if constraint.contains(table::LOGICAL_SOURCES) || constraint.contains(logical_sources::NAME) {
+                if constraint.contains(table::LOGICAL_SOURCES)
+                    || constraint.contains(logical_sources::NAME)
+                {
                     return SourceCatalogErr::LogicalSourceAlreadyExists {
                         name: logical.source_name.clone(),
                     };
@@ -116,13 +118,15 @@ impl SourceCatalog {
             if let Some(constraint) = inspect_constraint(&e) {
                 // FK to logical_sources
                 if constraint.contains(physical_sources::LOGICAL_SOURCE)
-                    || constraint.contains(table::LOGICAL_SOURCES) {
+                    || constraint.contains(table::LOGICAL_SOURCES)
+                {
                     return SourceCatalogErr::LogicalSourceNotFound {
                         name: physical.logical_source.clone(),
                     };
                 }
                 if constraint.contains(physical_sources::PLACEMENT_HOST_NAME)
-                    || constraint.contains(table::WORKERS) {
+                    || constraint.contains(table::WORKERS)
+                {
                     return SourceCatalogErr::WorkerNotFound {
                         host_name: physical.placement_host_name.clone(),
                         grpc_port: physical.placement_grpc_port,
@@ -151,11 +155,8 @@ impl SourceCatalog {
             let mut args = sqlx::sqlite::SqliteArguments::default();
             let _ = args.add(source_name);
 
-            let referencing_sources: Vec<i64> = self
-                .db
-                .select_scalar(&sql, args)
-                .await
-                .unwrap_or_default();
+            let referencing_sources: Vec<i64> =
+                self.db.select_scalar(&sql, args).await.unwrap_or_default();
 
             if !referencing_sources.is_empty() {
                 return Err(SourceCatalogErr::LogicalSourceReferencedByPhysical {
@@ -186,7 +187,8 @@ impl SourceCatalog {
             // checking with full query lists. The error message will guide users.
             if let Some(constraint) = inspect_constraint(&e) {
                 if constraint.contains(table::DEPLOYED_SOURCES)
-                    || constraint.contains(deployed_sources::PHYSICAL_SOURCE_ID) {
+                    || constraint.contains(deployed_sources::PHYSICAL_SOURCE_ID)
+                {
                     // We can't easily get the specific physical source ID and query list here
                     // without re-querying, so we'll provide a generic helpful message
                     // The user could enhance this with proactive checking if needed
@@ -216,129 +218,151 @@ impl SourceCatalog {
 
 #[cfg(test)]
 mod tests {
-    use crate::catalog::test_utils::{test_prop, CreatePhysicalSourceWithRefs};
     use crate::catalog::source::logical_source::{CreateLogicalSource, DropLogicalSource};
-    use quickcheck_macros::quickcheck;
+    use crate::catalog::test_utils::{arb_physical_with_refs, test_prop, PhysicalSourceWithRefs};
+    use crate::catalog::Catalog;
+    use proptest::prelude::*;
 
-    #[quickcheck]
-    fn logical_name_is_unique(create_source: CreateLogicalSource) -> bool {
-        test_prop(|catalog| async move {
+    async fn prop_logical_name_unique(catalog: Catalog, create_source: CreateLogicalSource) {
+        catalog
+            .source
+            .create_logical_source(&create_source)
+            .await
+            .expect("First logical source creation should succeed");
+
+        assert!(
             catalog
                 .source
                 .create_logical_source(&create_source)
                 .await
-                .expect("First logical source creation should succeed");
-
-            assert!(
-                catalog
-                    .source
-                    .create_logical_source(&create_source)
-                    .await
-                    .is_err(),
-                "Duplicate logical source name '{}' should be rejected",
-                create_source.source_name
-            );
-        })
+                .is_err(),
+            "Duplicate logical source with name '{}' should be rejected",
+            create_source.source_name
+        );
     }
 
-    #[quickcheck]
-    fn physical_source_refs_exist(req: CreatePhysicalSourceWithRefs) -> bool {
-        test_prop(|catalog| async move {
-            assert!(
-                catalog
-                    .source
-                    .create_physical_source(&req.create_physical)
-                    .await
-                    .is_err(),
-                "Physical source with missing refs should be rejected",
-            );
-
+    async fn prop_physical_refs_exist(catalog: Catalog, req: PhysicalSourceWithRefs) {
+        assert!(
             catalog
                 .source
-                .create_logical_source(&req.create_logical)
+                .create_physical_source(&req.physical)
                 .await
-                .expect("Logical source creation should succeed");
+                .is_err(),
+            "Physical source with missing refs should be rejected",
+        );
 
-            assert!(
-                catalog
-                    .source
-                    .create_physical_source(&req.create_physical)
-                    .await
-                    .is_err(),
-                "Physical source with missing worker ref should be rejected",
-            );
+        catalog
+            .source
+            .create_logical_source(&req.logical)
+            .await
+            .expect("Logical source creation should succeed");
 
-            catalog
-                .worker
-                .create_worker(&req.create_worker)
-                .await
-                .expect("Worker creation should succeed");
-
+        assert!(
             catalog
                 .source
-                .create_physical_source(&req.create_physical)
+                .create_physical_source(&req.physical)
                 .await
-                .expect("Physical source with valid refs should succeed");
-        })
+                .is_err(),
+            "Physical source with missing worker ref should be rejected",
+        );
+
+        catalog
+            .worker
+            .create_worker(&req.worker)
+            .await
+            .expect("Worker creation should succeed");
+
+        catalog
+            .source
+            .create_physical_source(&req.physical)
+            .await
+            .expect("Physical source with valid refs should succeed");
     }
 
-    #[quickcheck]
-    fn logical_source_drop_with_references_fails(create_req: CreatePhysicalSourceWithRefs) -> bool {
-        test_prop(|catalog| async move {
-            catalog
-                .source
-                .create_logical_source(&create_req.create_logical)
-                .await
-                .expect("CreateLogicalSource should succeed");
-            catalog
-                .worker
-                .create_worker(&create_req.create_worker)
-                .await
-                .expect("CreateWorker should succeed");
-            catalog
-                .source
-                .create_physical_source(&create_req.create_physical)
-                .await
-                .expect("CreatePhysicalSource should succeed");
+    async fn prop_drop_with_refs_fails(catalog: Catalog, req: PhysicalSourceWithRefs) {
+        catalog
+            .source
+            .create_logical_source(&req.logical)
+            .await
+            .expect("Logical source creation should succeed");
+        catalog
+            .worker
+            .create_worker(&req.worker)
+            .await
+            .expect("Worker creation should succeed");
+        catalog
+            .source
+            .create_physical_source(&req.physical)
+            .await
+            .expect("Physical source creation should succeed");
 
-            // Property: Cannot drop logical source while physical sources reference it
-            let drop_request = DropLogicalSource {
-                source_name: Some(create_req.create_logical.source_name.clone()),
-            };
+        // Property: Cannot drop logical source while physical sources reference it
+        let drop_request = DropLogicalSource {
+            source_name: Some(req.logical.source_name.clone()),
+        };
 
-            assert!(
-                catalog.source.drop_logical_source(&drop_request).await.is_err(),
-                "Should not be able to drop logical source '{}' while physical sources reference it",
-                create_req.create_logical.source_name
-            );
-        })
-    }
-
-    #[quickcheck]
-    fn create_drop_create_logical_source_succeeds(create_source: CreateLogicalSource) -> bool {
-        test_prop(|catalog| async move {
-            // Property: Create-Drop-Create sequence is idempotent
-            catalog
-                .source
-                .create_logical_source(&create_source)
-                .await
-                .expect("First create should succeed");
-
-            let drop_request = DropLogicalSource {
-                source_name: Some(create_source.source_name.clone()),
-            };
-
+        assert!(
             catalog
                 .source
                 .drop_logical_source(&drop_request)
                 .await
-                .expect("Drop should succeed");
+                .is_err(),
+            "Should not be able to drop logical source '{}' while physical sources reference it",
+            req.logical.source_name
+        );
+    }
 
-            catalog
-                .source
-                .create_logical_source(&create_source)
-                .await
-                .expect("Second create after drop should succeed");
-        })
+    async fn prop_create_drop_create_logical(catalog: Catalog, create_source: CreateLogicalSource) {
+        catalog
+            .source
+            .create_logical_source(&create_source)
+            .await
+            .expect("First create should succeed");
+
+        let drop_request = DropLogicalSource {
+            source_name: Some(create_source.source_name.clone()),
+        };
+
+        catalog
+            .source
+            .drop_logical_source(&drop_request)
+            .await
+            .expect("Drop should succeed");
+
+        catalog
+            .source
+            .create_logical_source(&create_source)
+            .await
+            .expect("Second create after drop should succeed");
+    }
+
+    proptest! {
+        #[test]
+        fn logical_name_unique(create_source: CreateLogicalSource) {
+            test_prop(|catalog| async move {
+                prop_logical_name_unique(catalog, create_source).await;
+            });
+        }
+
+        #[test]
+        fn physical_source_refs_exist(req in arb_physical_with_refs()) {
+            test_prop(|catalog| async move {
+                prop_physical_refs_exist(catalog, req).await;
+            })
+        }
+
+        #[test]
+        fn physical_source_drop_with_refs(req in arb_physical_with_refs()) {
+            test_prop(|catalog| async move {
+                prop_drop_with_refs_fails(catalog, req).await;
+            })
+        }
+
+        #[test]
+        fn create_drop_create_logical_succeeds(create_source: CreateLogicalSource) {
+            test_prop(|catalog| async move {
+                prop_create_drop_create_logical(catalog, create_source).await;
+            })
+        }
     }
 }

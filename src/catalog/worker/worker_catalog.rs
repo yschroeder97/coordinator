@@ -5,10 +5,11 @@ use crate::catalog::notification::Notifier;
 use crate::catalog::query_builder::ToSql;
 use crate::catalog::tables::table;
 use sqlx::sqlite::SqliteArguments;
-use sqlx::QueryBuilder;
+use sqlx::{Execute, QueryBuilder};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::watch;
+use tracing::info;
 
 #[derive(Error, Debug)]
 pub enum WorkerCatalogErr {
@@ -85,7 +86,8 @@ impl WorkerCatalog {
                             .bind(worker.data_port)
                             .bind(worker.capacity);
 
-                        let mut builder = QueryBuilder::new(format!("INSERT INTO {}", table::NETWORK_LINKS));
+
+                        let mut builder = QueryBuilder::new(format!("INSERT INTO {} ", table::NETWORK_LINKS));
                         let network_links_insert = builder
                             .push_values(&worker.peers, |mut b, peer| {
                                 b.push_bind(&worker.host_name)
@@ -184,67 +186,74 @@ impl WorkerCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::test_utils::{test_prop, CreatePhysicalSourceWithRefs, CreateSinkWithRefs};
-    use quickcheck_macros::quickcheck;
+    use crate::catalog::test_utils::{
+        arb_create_sink, arb_physical_with_refs, test_prop, PhysicalSourceWithRefs, SinkWithRefs,
+    };
+    use crate::catalog::Catalog;
+    use proptest::proptest;
 
-    #[quickcheck]
-    fn worker_drop_with_physical_sources_fails(create_req: CreatePhysicalSourceWithRefs) -> bool {
-        test_prop(|catalog| async move {
-            catalog
-                .source
-                .create_logical_source(&create_req.create_logical)
-                .await
-                .expect("CreateLogicalSource should succeed");
-            catalog
-                .worker
-                .create_worker(&create_req.create_worker)
-                .await
-                .expect("CreateWorker should succeed");
-            catalog
-                .source
-                .create_physical_source(&create_req.create_physical)
-                .await
-                .expect("CreatePhysicalSource should succeed");
+    async fn prop_worker_drop_with_refs_fails(catalog: Catalog, req: PhysicalSourceWithRefs) {
+        catalog
+            .source
+            .create_logical_source(&req.logical)
+            .await
+            .expect("Logical source creation should succeed");
+        catalog
+            .worker
+            .create_worker(&req.worker)
+            .await
+            .expect("Worker creation should succeed");
+        catalog
+            .source
+            .create_physical_source(&req.physical)
+            .await
+            .expect("Physical source creation should succeed");
 
-            // Property: Cannot drop worker while physical sources reference it
-            let grpc_addr = GrpcAddr::new(
-                create_req.create_worker.host_name,
-                create_req.create_worker.grpc_port,
-            );
+        // Property: Cannot drop worker while physical sources reference it
+        let grpc_addr = GrpcAddr::new(req.worker.host_name, req.worker.grpc_port);
 
-            assert!(
-                catalog.worker.delete_worker(&grpc_addr).await.is_err(),
-                "Should not be able to drop worker '{}' while physical sources reference it",
-                grpc_addr,
-            );
-        })
+        assert!(
+            catalog.worker.delete_worker(&grpc_addr).await.is_err(),
+            "Should not be able to drop worker '{}' while physical sources reference it",
+            grpc_addr,
+        );
     }
 
-    #[quickcheck]
-    fn worker_drop_with_sinks_fails(create_req: CreateSinkWithRefs) -> bool {
-        test_prop(|catalog| async move {
-            catalog
-                .worker
-                .create_worker(&create_req.create_worker)
-                .await
-                .expect("CreateWorker should succeed");
-            catalog
-                .sink
-                .create_sink(&create_req.create_sink)
-                .await
-                .expect("CreateSink should succeed");
+    async fn prop_sink_worker_exists(catalog: Catalog, req: SinkWithRefs) {
+        catalog
+            .worker
+            .create_worker(&req.worker)
+            .await
+            .expect("Worker creation should succeed");
+        catalog
+            .sink
+            .create_sink(&req.sink)
+            .await
+            .expect("Sink creation should succeed");
 
-            // Property: Cannot delete worker while sinks reference it
-            let grpc_addr = GrpcAddr::new(
-                create_req.create_worker.host_name,
-                create_req.create_worker.grpc_port,
-            );
+        // Property: Cannot delete worker while sinks reference it
+        let grpc_addr = GrpcAddr::new(req.worker.host_name, req.worker.grpc_port);
 
-            assert!(
-                catalog.worker.delete_worker(&grpc_addr).await.is_err(),
-                "Should not be able to drop worker '{}' while sinks reference it",
-                grpc_addr
-            );
-        })
+        assert!(
+            catalog.worker.delete_worker(&grpc_addr).await.is_err(),
+            "Should not be able to drop worker '{}' while sinks reference it",
+            grpc_addr
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn worker_drop_with_refs_fails(req in arb_physical_with_refs()) {
+            test_prop(|catalog| async move {
+                prop_worker_drop_with_refs_fails(catalog, req).await;
+            });
+        }
+
+        #[test]
+        fn worker_drop_with_sinks_fails(req in arb_create_sink()) {
+            test_prop(|catalog| async move {
+                prop_sink_worker_exists(catalog, req).await;
+            })
+        }
     }
 }

@@ -109,10 +109,9 @@ into_request!(GetWorker, GetWorkerRequest, CoordinatorRequest);
 const DEFAULT_CAPACITY: usize = 16;
 
 #[cfg(not(madsim))]
-pub fn start_coordinator(batch_size: Option<usize>) -> CoordinatorHandle<CoordinatorRequest> {
+pub fn start_coordinator(batch_size: Option<usize>) -> CoordinatorHandle {
     info!("Starting");
-    let (handle, receiver) =
-        message_bus::<CoordinatorRequest>(batch_size.unwrap_or(DEFAULT_CAPACITY));
+    let (handle, receiver) = message_bus(batch_size.unwrap_or(DEFAULT_CAPACITY));
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -156,9 +155,9 @@ pub fn start_coordinator(batch_size: Option<usize>) -> CoordinatorHandle<Coordin
     handle
 }
 
-pub async fn start_test_coordinator() -> CoordinatorHandle<CoordinatorRequest> {
+pub async fn start_test_coordinator() -> CoordinatorHandle {
     info!("Starting");
-    let (handle, receiver) = message_bus::<CoordinatorRequest>(DEFAULT_CAPACITY);
+    let (handle, receiver) = message_bus(DEFAULT_CAPACITY);
 
     let catalog = Catalog::from_env().await.expect("Failed to create Catalog");
 
@@ -191,12 +190,12 @@ pub async fn start_test_coordinator() -> CoordinatorHandle<CoordinatorRequest> {
 }
 
 struct RequestListener {
-    receiver: CoordinatorReceiver<CoordinatorRequest>,
+    receiver: CoordinatorReceiver,
     catalog: Catalog,
 }
 
 impl RequestListener {
-    fn new(receiver: CoordinatorReceiver<CoordinatorRequest>, catalog: Catalog) -> RequestListener {
+    fn new(receiver: CoordinatorReceiver, catalog: Catalog) -> RequestListener {
         Self { receiver, catalog }
     }
 

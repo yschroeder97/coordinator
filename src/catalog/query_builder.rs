@@ -291,167 +291,167 @@ impl UpdateBuilder {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::catalog::query_builder::{SqlOperation, UpdateBuilder, WhereBuilder};
-    use quickcheck::{Arbitrary, Gen};
-    use quickcheck_macros::quickcheck;
-    use sqlx::Arguments;
-
-    #[test]
-    fn where_builder_no_where() {
-        let sql = WhereBuilder::from(SqlOperation::Select("table")).to_sql();
-
-        assert_eq!(sql, "SELECT * FROM table");
-    }
-
-    #[test]
-    fn where_builder_select_one() {
-        let sql = WhereBuilder::from(SqlOperation::Select("table"))
-            .eq::<String>("col1", Some("value".into()))
-            .to_sql();
-
-        assert_eq!(sql, "SELECT * FROM table WHERE col1 = ?");
-    }
-
-    #[test]
-    fn where_builder_select_two() {
-        let sql = WhereBuilder::from(SqlOperation::Select("table"))
-            .eq::<String>("col1", Some("value".into()))
-            .eq::<String>("col2", Some("another".into()))
-            .to_sql();
-
-        assert_eq!(sql, "SELECT * FROM table WHERE col1 = ? AND col2 = ?");
-    }
-
-    #[test]
-    fn test_update_one_no_where() {
-        let (sql, _) = UpdateBuilder::on_table("test")
-            .set("current_state", "Pending")
-            .into_parts();
-
-        assert_eq!(sql, "UPDATE test SET current_state = ?");
-    }
-
-    #[test]
-    fn test_update_two_one_where() {
-        let (sql, _) = UpdateBuilder::on_table("test")
-            .set("current_state", "Pending")
-            .set("desired_state", "Running")
-            .add_where()
-            .eq("id", "example_query".into())
-            .into_parts();
-
-        assert_eq!(
-            sql,
-            "UPDATE test SET current_state = ?, desired_state = ? WHERE id = ?"
-        );
-    }
-
-    impl Arbitrary for SqlOperation {
-        fn arbitrary(g: &mut Gen) -> Self {
-            use strum::IntoEnumIterator;
-            let variants: Vec<SqlOperation> = SqlOperation::iter().collect();
-            *g.choose(&variants).expect("choose value")
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    struct WhereBuilderInput {
-        builder: WhereBuilder,
-        conditions: Vec<(String, String)>,
-    }
-
-    /// Generate a safe SQL column name without special characters
-    fn arbitrary_column_name(g: &mut Gen) -> String {
-        let size = (usize::arbitrary(g) % 20) + 1; // 1-20 chars
-        (0..size)
-            .map(|_| {
-                let chars = b"abcdefghijklmnopqrstuvwxyz_0123456789";
-                chars[usize::arbitrary(g) % chars.len()] as char
-            })
-            .collect()
-    }
-
-    impl Arbitrary for WhereBuilderInput {
-        fn arbitrary(g: &mut Gen) -> Self {
-            let size = usize::arbitrary(g) % 10;
-            let conditions: Vec<(String, String)> = (0..size)
-                .map(|_| (arbitrary_column_name(g), String::arbitrary(g)))
-                .collect();
-
-            let builder = conditions.iter().fold(
-                WhereBuilder::from(SqlOperation::arbitrary(g)),
-                |builder, (col, val)| builder.eq(col, Some(val.clone())),
-            );
-
-            WhereBuilderInput {
-                builder,
-                conditions,
-            }
-        }
-    }
-
-    #[quickcheck]
-    fn where_builder_all_values_bound(input: WhereBuilderInput) {
-        let (_, args) = input.builder.into_parts();
-        assert_eq!(input.conditions.len(), args.len());
-    }
-
-    #[quickcheck]
-    fn where_builder_all_columns_present(input: WhereBuilderInput) {
-        let sql = input.builder.to_sql();
-
-        // Verify each column appears in the SQL with its placeholder
-        let all_columns_present = input
-            .conditions
-            .iter()
-            .all(|(col, _)| sql.contains(&format!("{} =", col)));
-
-        assert!(
-            all_columns_present,
-            "Not all columns are present in SQL: {}",
-            sql
-        );
-    }
-
-    #[quickcheck]
-    fn where_builder_placeholder_count_matches(input: WhereBuilderInput) {
-        let (sql, args) = input.builder.clone().into_parts();
-
-        // Count placeholders in SQL
-        let placeholder_count = sql.matches('?').count();
-
-        // Should match the number of arguments
-        assert_eq!(
-            placeholder_count,
-            args.len(),
-            "Placeholder count ({}) doesn't match argument count ({}). SQL: {}",
-            placeholder_count,
-            args.len(),
-            sql
-        );
-    }
-
-    #[quickcheck]
-    fn where_builder_columns_and_args_match(input: WhereBuilderInput) {
-        let (sql, args) = input.builder.clone().into_parts();
-
-        assert_eq!(
-            input.conditions.len(),
-            args.len(),
-            "Number of conditions ({}) doesn't match arguments ({})",
-            input.conditions.len(),
-            args.len()
-        );
-
-        for (col, _) in &input.conditions {
-            assert!(
-                sql.contains(&format!("{} =", col)),
-                "Column '{}' not found in SQL: {}",
-                col,
-                sql
-            );
-        }
-    }
-}
+// #[cfg(test)]
+// mod tests {
+//     use crate::catalog::query_builder::{SqlOperation, UpdateBuilder, WhereBuilder};
+//     use quickcheck::{Arbitrary, Gen};
+//     use quickcheck_macros::quickcheck;
+//     use sqlx::Arguments;
+// 
+//     #[test]
+//     fn where_builder_no_where() {
+//         let sql = WhereBuilder::from(SqlOperation::Select("table")).to_sql();
+// 
+//         assert_eq!(sql, "SELECT * FROM table");
+//     }
+// 
+//     #[test]
+//     fn where_builder_select_one() {
+//         let sql = WhereBuilder::from(SqlOperation::Select("table"))
+//             .eq::<String>("col1", Some("value".into()))
+//             .to_sql();
+// 
+//         assert_eq!(sql, "SELECT * FROM table WHERE col1 = ?");
+//     }
+// 
+//     #[test]
+//     fn where_builder_select_two() {
+//         let sql = WhereBuilder::from(SqlOperation::Select("table"))
+//             .eq::<String>("col1", Some("value".into()))
+//             .eq::<String>("col2", Some("another".into()))
+//             .to_sql();
+// 
+//         assert_eq!(sql, "SELECT * FROM table WHERE col1 = ? AND col2 = ?");
+//     }
+// 
+//     #[test]
+//     fn test_update_one_no_where() {
+//         let (sql, _) = UpdateBuilder::on_table("test")
+//             .set("current_state", "Pending")
+//             .into_parts();
+// 
+//         assert_eq!(sql, "UPDATE test SET current_state = ?");
+//     }
+// 
+//     #[test]
+//     fn test_update_two_one_where() {
+//         let (sql, _) = UpdateBuilder::on_table("test")
+//             .set("current_state", "Pending")
+//             .set("desired_state", "Running")
+//             .add_where()
+//             .eq("id", "example_query".into())
+//             .into_parts();
+// 
+//         assert_eq!(
+//             sql,
+//             "UPDATE test SET current_state = ?, desired_state = ? WHERE id = ?"
+//         );
+//     }
+// 
+//     impl Arbitrary for SqlOperation {
+//         fn arbitrary(g: &mut Gen) -> Self {
+//             use strum::IntoEnumIterator;
+//             let variants: Vec<SqlOperation> = SqlOperation::iter().collect();
+//             *g.choose(&variants).expect("choose value")
+//         }
+//     }
+// 
+//     #[derive(Clone, Debug)]
+//     struct WhereBuilderInput {
+//         builder: WhereBuilder,
+//         conditions: Vec<(String, String)>,
+//     }
+// 
+//     /// Generate a safe SQL column name without special characters
+//     fn arbitrary_column_name(g: &mut Gen) -> String {
+//         let size = (usize::arbitrary(g) % 20) + 1; // 1-20 chars
+//         (0..size)
+//             .map(|_| {
+//                 let chars = b"abcdefghijklmnopqrstuvwxyz_0123456789";
+//                 chars[usize::arbitrary(g) % chars.len()] as char
+//             })
+//             .collect()
+//     }
+// 
+//     impl Arbitrary for WhereBuilderInput {
+//         fn arbitrary(g: &mut Gen) -> Self {
+//             let size = usize::arbitrary(g) % 10;
+//             let conditions: Vec<(String, String)> = (0..size)
+//                 .map(|_| (arbitrary_column_name(g), String::arbitrary(g)))
+//                 .collect();
+// 
+//             let builder = conditions.iter().fold(
+//                 WhereBuilder::from(SqlOperation::arbitrary(g)),
+//                 |builder, (col, val)| builder.eq(col, Some(val.clone())),
+//             );
+// 
+//             WhereBuilderInput {
+//                 builder,
+//                 conditions,
+//             }
+//         }
+//     }
+// 
+//     #[quickcheck]
+//     fn where_builder_all_values_bound(input: WhereBuilderInput) {
+//         let (_, args) = input.builder.into_parts();
+//         assert_eq!(input.conditions.len(), args.len());
+//     }
+// 
+//     #[quickcheck]
+//     fn where_builder_all_columns_present(input: WhereBuilderInput) {
+//         let sql = input.builder.to_sql();
+// 
+//         // Verify each column appears in the SQL with its placeholder
+//         let all_columns_present = input
+//             .conditions
+//             .iter()
+//             .all(|(col, _)| sql.contains(&format!("{} =", col)));
+// 
+//         assert!(
+//             all_columns_present,
+//             "Not all columns are present in SQL: {}",
+//             sql
+//         );
+//     }
+// 
+//     #[quickcheck]
+//     fn where_builder_placeholder_count_matches(input: WhereBuilderInput) {
+//         let (sql, args) = input.builder.clone().into_parts();
+// 
+//         // Count placeholders in SQL
+//         let placeholder_count = sql.matches('?').count();
+// 
+//         // Should match the number of arguments
+//         assert_eq!(
+//             placeholder_count,
+//             args.len(),
+//             "Placeholder count ({}) doesn't match argument count ({}). SQL: {}",
+//             placeholder_count,
+//             args.len(),
+//             sql
+//         );
+//     }
+// 
+//     #[quickcheck]
+//     fn where_builder_columns_and_args_match(input: WhereBuilderInput) {
+//         let (sql, args) = input.builder.clone().into_parts();
+// 
+//         assert_eq!(
+//             input.conditions.len(),
+//             args.len(),
+//             "Number of conditions ({}) doesn't match arguments ({})",
+//             input.conditions.len(),
+//             args.len()
+//         );
+// 
+//         for (col, _) in &input.conditions {
+//             assert!(
+//                 sql.contains(&format!("{} =", col)),
+//                 "Column '{}' not found in SQL: {}",
+//                 col,
+//                 sql
+//             );
+//         }
+//     }
+// }

@@ -1,10 +1,12 @@
+use crate::catalog::catalog_errors::CatalogErr;
 use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
 use crate::catalog::source::schema::Schema;
 use crate::catalog::tables::{logical_sources, table};
 use crate::request::Request;
+#[cfg(test)]
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteArguments;
-use crate::catalog::catalog_errors::CatalogErr;
 
 pub type LogicalSourceName = String;
 
@@ -15,6 +17,7 @@ pub struct LogicalSource {
     pub schema: Schema,
 }
 
+#[cfg_attr(test, derive(Arbitrary))]
 #[derive(Clone, Debug)]
 pub struct CreateLogicalSource {
     pub source_name: LogicalSourceName,
@@ -41,8 +44,7 @@ impl ToSql for DropLogicalSource {
 pub struct GetLogicalSource {
     pub source_name: Option<LogicalSourceName>,
 }
-pub type GetLogicalSourceRequest =
-Request<GetLogicalSource, Result<LogicalSource, CatalogErr>>;
+pub type GetLogicalSourceRequest = Request<GetLogicalSource, Result<LogicalSource, CatalogErr>>;
 
 impl ToSql for GetLogicalSource {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {

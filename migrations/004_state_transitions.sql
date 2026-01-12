@@ -24,7 +24,7 @@ BEGIN
                    RAISE(ABORT, 'Invalid state transition: Running must transition to Terminating, Failed, Completed, or Stopped')
 
                -- Terminating can only go to Stopped
-               WHEN OLD.current_state = 'Terminating' AND NEW.current_state != 'Stopped' THEN
+               WHEN OLD.current_state = 'Terminating' AND NEW.current_state NOT IN ('Stopped', 'Failed') THEN
                    RAISE(ABORT, 'Invalid state transition: Terminating must transition to Stopped')
 
                -- Terminal states cannot transition further

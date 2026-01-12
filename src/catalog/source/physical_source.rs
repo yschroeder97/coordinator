@@ -1,16 +1,19 @@
 use super::logical_source::LogicalSourceName;
+use crate::catalog::catalog_errors::CatalogErr;
 use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
 use crate::catalog::tables::{physical_sources, table};
 use crate::catalog::worker::endpoint::{HostName, NetworkAddr};
 use crate::request::Request;
+#[cfg(test)]
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteArguments;
 use std::collections::HashMap;
 use strum::EnumIter;
-use crate::catalog::catalog_errors::CatalogErr;
 
 pub type PhysicalSourceId = i64;
 
+#[cfg_attr(test, derive(Arbitrary))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, sqlx::Type, EnumIter)]
 #[sqlx(type_name = "TEXT")]
 pub enum SourceType {
@@ -87,7 +90,7 @@ pub struct GetPhysicalSource {
     pub with_type: Option<SourceType>,
 }
 pub type GetPhysicalSourceRequest =
-Request<GetPhysicalSource, Result<Vec<PhysicalSource>, CatalogErr>>;
+    Request<GetPhysicalSource, Result<Vec<PhysicalSource>, CatalogErr>>;
 
 impl ToSql for GetPhysicalSource {
     fn to_sql(&self) -> (String, SqliteArguments<'_>) {

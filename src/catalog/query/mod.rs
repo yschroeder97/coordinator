@@ -6,10 +6,12 @@ use crate::catalog::tables::active_queries;
 use crate::catalog::tables::table;
 use crate::catalog::worker::endpoint::{HostName, NetworkAddr};
 use crate::request::Request;
+#[cfg(test)]
+use proptest_derive::Arbitrary;
 use sqlx::sqlite::SqliteArguments;
+use std::str::FromStr;
 use strum::{Display, EnumIter, EnumString};
 use uuid::Uuid;
-use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, sqlx::Type, Display)]
 pub enum StopMode {
@@ -26,6 +28,7 @@ impl From<StopMode> for i32 {
     }
 }
 
+#[cfg_attr(test, derive(Arbitrary))]
 #[derive(Clone, Copy, Debug, PartialEq, sqlx::Type, Display, EnumIter, EnumString)]
 pub enum QueryState {
     Pending,     // Query was (partially) submitted/started
@@ -40,6 +43,24 @@ pub enum QueryState {
 impl From<String> for QueryState {
     fn from(s: String) -> Self {
         QueryState::from_str(&s).unwrap_or(QueryState::Failed)
+    }
+}
+
+impl QueryState {
+    pub fn transitions(&self) -> Vec<QueryState> {
+        match self {
+            QueryState::Pending => vec![QueryState::Deploying],
+            QueryState::Deploying => vec![QueryState::Running, QueryState::Failed],
+            QueryState::Running => vec![
+                QueryState::Terminating,
+                QueryState::Failed,
+                QueryState::Completed,
+                QueryState::Stopped,
+            ],
+            QueryState::Terminating => vec![QueryState::Failed, QueryState::Stopped],
+            // Terminal states have no valid next states
+            QueryState::Completed | QueryState::Stopped | QueryState::Failed => vec![],
+        }
     }
 }
 
