@@ -39,6 +39,14 @@ BEGIN
                    RAISE(ABORT, 'Active query cannot be deleted; transition to Stopped, Completed, or Failed first.')
         END;
 
-    INSERT INTO terminated_queries (id, statement, termination_state, error)
-    VALUES (OLD.id, OLD.statement, OLD.current_state, NULL);
+    INSERT INTO terminated_queries (id, statement, termination_state, error, stack_trace)
+    VALUES (OLD.id, OLD.statement, OLD.current_state, old.error, old.stack_trace);
+END;
+
+CREATE TRIGGER release_worker_capacity
+    BEFORE DELETE ON query_fragments
+BEGIN
+    UPDATE workers
+    SET capacity = capacity + OLD.used_capacity
+    WHERE host_name = OLD.host_name AND grpc_port = OLD.grpc_port;
 END;

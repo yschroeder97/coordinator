@@ -33,6 +33,17 @@ impl<T> JoinSet<T> {
         use futures_util::StreamExt;
         self.tasks.next().await
     }
+
+    pub async fn join_all(mut self) -> Vec<T> {
+        use futures_util::StreamExt;
+        let mut results = Vec::new();
+        while let Some(result) = self.tasks.next().await {
+            if let Ok(value) = result {
+                results.push(value);
+            }
+        }
+        results
+    }
 }
 
 #[cfg(madsim)]

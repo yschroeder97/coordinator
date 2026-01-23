@@ -4,8 +4,12 @@ use super::{
 };
 use crate::catalog::database::{Database, DatabaseErr};
 use crate::catalog::notification::Notifier;
-use crate::catalog::query_builder::ToSql;
+use crate::catalog::query::fragment::{
+    CreateQueryFragment, FragmentId, GetFragment, MarkFragment, QueryFragment,
+};
+use crate::catalog::query_builder::{InsertBuilder, ToSql};
 use crate::catalog::sink::SinkName;
+use crate::catalog::tables::{query_fragments, table};
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Arguments;
 use std::sync::Arc;
@@ -96,6 +100,14 @@ impl QueryCatalog {
         Ok(())
     }
 
+    pub(crate) async fn get_fragments(
+        &self,
+        get_fragments: &GetFragment,
+    ) -> Result<Vec<QueryFragment>, QueryCatalogErr> {
+        let (sql, args) = get_fragments.to_sql();
+        self.db.select(&sql, args).await.map_err(Into::into)
+    }
+
     pub(crate) async fn get_terminated_queries(
         &self,
     ) -> Result<Vec<TerminatedQuery>, QueryCatalogErr> {
@@ -114,7 +126,8 @@ impl QueryCatalog {
     ) -> Result<Vec<QueryLogEntry>, QueryCatalogErr> {
         let sql = "SELECT * FROM query_changelog WHERE query_id = ? ORDER BY timestamp";
         let mut args = SqliteArguments::default();
-        args.add(name);
+        args.add(name)
+            .map_err(|e| DatabaseErr::Database(sqlx::Error::Protocol(e.to_string())))?;
 
         self.db.select(sql, args).await.map_err(Into::into)
     }
@@ -137,20 +150,88 @@ impl QueryCatalog {
             .map_err(Into::into)
     }
 
-    pub(crate) async fn update_query_state(&self, mark: &MarkQuery) -> Result<(), QueryCatalogErr> {
+    pub(crate) async fn move_to_next_state(&self, mark: &MarkQuery) -> Result<(), QueryCatalogErr> {
         let (sql, args) = mark.to_sql();
         self.db.update(&sql, args).await?;
         self.notify();
         Ok(())
     }
+
+    pub(crate) async fn update_fragment_states(
+        &self,
+        marks: &[MarkFragment],
+    ) -> Result<(), QueryCatalogErr> {
+        if marks.is_empty() {
+            return Ok(());
+        }
+
+        // Build a batch update using CASE expression:
+        // UPDATE query_fragments SET current_state = CASE rowid
+        //   WHEN id1 THEN 'State1'
+        //   WHEN id2 THEN 'State2'
+        // END WHERE rowid IN (id1, id2)
+        let case_branches: Vec<String> = marks
+            .iter()
+            .map(|m| format!("WHEN {} THEN '{}'", m.id, m.new_state))
+            .collect();
+
+        let ids: Vec<String> = marks.iter().map(|m| m.id.to_string()).collect();
+
+        let sql = format!(
+            "UPDATE query_fragments SET current_state = CASE rowid {} END WHERE rowid IN ({})",
+            case_branches.join(" "),
+            ids.join(", ")
+        );
+
+        self.db.execute(sqlx::query(&sql)).await?;
+        Ok(())
+    }
+
+    pub async fn insert_fragments(
+        &self,
+        fragments: &Vec<CreateQueryFragment>,
+    ) -> Result<Vec<FragmentId>, QueryCatalogErr> {
+        if fragments.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut builder = InsertBuilder::new(
+            table::QUERY_FRAGMENTS,
+            &[
+                query_fragments::QUERY_ID,
+                query_fragments::HOST_NAME,
+                query_fragments::GRPC_PORT,
+                query_fragments::CURRENT_STATE,
+                query_fragments::DESIRED_STATE,
+                query_fragments::PLAN,
+                query_fragments::USED_CAPACITY,
+            ],
+        );
+
+        for fragment in fragments {
+            builder.add_row(|row| {
+                row.push(fragment.query_id.clone())
+                    .push(fragment.host_name.clone())
+                    .push(fragment.grpc_port)
+                    .push(fragment.current_state.clone())
+                    .push(fragment.desired_state.clone())
+                    .push(fragment.plan.clone())
+                    .push(fragment.used_capacity);
+            });
+        }
+
+        builder.returning(&["rowid"]);
+
+        let (sql, args) = builder.into_parts();
+        self.db.select_scalar(&sql, args).await.map_err(Into::into)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::catalog::query::{CreateQuery, GetQuery, MarkQuery, QueryState};
-    use crate::catalog::test_utils::{
-        arb_create_query, arb_valid_state_sequence, test_prop, SinkWithRefs,
-    };
+    use crate::catalog::query::query_state::QueryStateTransitionType;
+    use crate::catalog::query::{CreateQuery, DesiredQueryState, GetQuery, MarkQuery, QueryState};
+    use crate::catalog::test_utils::{arb_create_query, arb_state_sequence, test_prop};
     use crate::catalog::Catalog;
     use proptest::proptest;
 
@@ -191,7 +272,7 @@ mod tests {
         assert_eq!(entry.query_id, create_query.name);
         assert_eq!(entry.statement, create_query.stmt);
         assert_eq!(entry.current_state, QueryState::Pending);
-        assert_eq!(entry.desired_state, QueryState::Running);
+        assert_eq!(entry.desired_state, DesiredQueryState::Running);
     }
 
     async fn prop_query_lifecycle(catalog: Catalog, create_query: CreateQuery) {
@@ -199,18 +280,27 @@ mod tests {
 
         catalog
             .query
-            .update_query_state(&MarkQuery {
+            .move_to_next_state(&MarkQuery {
                 id: create_query.name.clone(),
-                new_current: QueryState::Deploying,
+                new_state: QueryState::Planned,
             })
             .await
-            .expect("State update to Deploying should succeed");
+            .expect("State update to Planned should succeed");
 
         catalog
             .query
-            .update_query_state(&MarkQuery {
+            .move_to_next_state(&MarkQuery {
                 id: create_query.name.clone(),
-                new_current: QueryState::Running,
+                new_state: QueryState::Registered,
+            })
+            .await
+            .expect("State update to Registered should succeed");
+
+        catalog
+            .query
+            .move_to_next_state(&MarkQuery {
+                id: create_query.name.clone(),
+                new_state: QueryState::Running,
             })
             .await
             .expect("State update to Running should succeed");
@@ -218,9 +308,9 @@ mod tests {
         // Mark query as Stopped first (trigger constraint)
         catalog
             .query
-            .update_query_state(&MarkQuery {
+            .move_to_next_state(&MarkQuery {
                 id: create_query.name.clone(),
-                new_current: QueryState::Stopped,
+                new_state: QueryState::Stopped,
             })
             .await
             .expect("State update to Stopped should succeed");
@@ -265,9 +355,9 @@ mod tests {
         for state in &path {
             catalog
                 .query
-                .update_query_state(&MarkQuery {
+                .move_to_next_state(&MarkQuery {
                     id: create_query.name.clone(),
-                    new_current: *state,
+                    new_state: *state,
                 })
                 .await
                 .expect("Valid update failed");
@@ -294,14 +384,14 @@ mod tests {
             .query
             .create_query(&create_query)
             .await
-            .expect("Create failed");
+            .expect("Valid query creation should not fail");
 
         for state in &path {
             catalog
                 .query
-                .update_query_state(&MarkQuery {
+                .move_to_next_state(&MarkQuery {
                     id: create_query.name.clone(),
-                    new_current: *state,
+                    new_state: *state,
                 })
                 .await
                 .expect("Valid update failed");
@@ -322,6 +412,65 @@ mod tests {
                 next.timestamp
             );
         }
+    }
+
+    async fn prop_illegal_transitions_rejected(
+        catalog: Catalog,
+        create_query: CreateQuery,
+        path: Vec<QueryState>,
+    ) {
+        assert!(
+            path.len() >= 2,
+            "BUG: Path should always have a length at least 2, but was {:?}",
+            path
+        );
+
+        catalog
+            .query
+            .create_query(&create_query)
+            .await
+            .expect("Valid query creation should not fail");
+        let inserted = catalog
+            .query
+            .get_active_queries(&GetQuery::new().with_id(create_query.name.clone()))
+            .await
+            .expect("Query should be in the catalog");
+        assert_eq!(
+            inserted.len(),
+            1,
+            "Query should have a single corresponding row"
+        );
+        assert_eq!(
+            inserted.first().unwrap().current_state,
+            QueryState::Pending,
+            "Query should initially be in Pending state"
+        );
+
+        for window in path[..path.len() - 1].windows(2) {
+            let (_prev, next) = (&window[0], &window[1]);
+            catalog
+                .query
+                .move_to_next_state(&MarkQuery {
+                    id: create_query.name.clone(),
+                    new_state: *next,
+                })
+                .await
+                .expect("Valid query state transition should succeed");
+        }
+
+        let last_transition = catalog
+            .query
+            .move_to_next_state(&MarkQuery {
+                id: create_query.name,
+                new_state: *path.last().unwrap(),
+            })
+            .await;
+        assert!(
+            last_transition.is_err(),
+            "Last transition {} -> {} is illegal, but succeeded",
+            path[path.len() - 2],
+            path.last().unwrap()
+        );
     }
 
     proptest! {
@@ -347,47 +496,24 @@ mod tests {
         }
 
         #[test]
-        fn changelog_tracks_all_updates(req in arb_create_query(), state_changes in arb_valid_state_sequence()) {
+        fn changelog_tracks_all_updates(req in arb_create_query(), state_changes in arb_state_sequence(QueryStateTransitionType::Valid)) {
             test_prop(|catalog| async move {
                 prop_changelog_tracks_all_updates(catalog, req, state_changes).await;
             })
         }
 
         #[test]
-        fn changelog_is_monotonic(req in arb_create_query(), state_changes in arb_valid_state_sequence()) {
+        fn changelog_is_monotonic(req in arb_create_query(), state_changes in arb_state_sequence(QueryStateTransitionType::Valid)) {
             test_prop(|catalog| async move {
                 prop_changelog_is_monotonic(catalog, req, state_changes).await;
             })
         }
-    }
 
-    // #[quickcheck]
-    // fn invalid_state_transitions_rejected(
-    //     create_query: CreateQuery,
-    //     invalid: InvalidQueryTransition,
-    // ) {
-    //     test_prop(|catalog| async move {
-    //         catalog
-    //             .query
-    //             .create_query(&create_query)
-    //             .await
-    //             .expect("Create failed");
-    //
-    //         // Now we are at 'invalid.from'. Try to update to 'invalid.to'.
-    //         let result = catalog
-    //             .query
-    //             .update_query_state(&MarkQuery {
-    //                 id: create_query.name.clone(),
-    //                 new_current: invalid.to,
-    //             })
-    //             .await;
-    //
-    //         assert!(
-    //             result.is_err(),
-    //             "Invalid transition {:?} -> {:?} should have been rejected",
-    //             invalid.from,
-    //             invalid.to
-    //         );
-    //     });
-    // }
+        #[test]
+        fn illegal_transitions_rejected(req in arb_create_query(), state_changes in arb_state_sequence(QueryStateTransitionType::Invalid)) {
+            test_prop(|catalog| async move {
+                prop_illegal_transitions_rejected(catalog, req, state_changes).await;
+            })
+        }
+    }
 }

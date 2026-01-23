@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS active_queries
     current_state TEXT NOT NULL DEFAULT 'Pending',
     desired_state TEXT NOT NULL DEFAULT 'Running',
     stop_mode     TEXT          DEFAULT NULL,
+    error         TEXT          DEFAULT NULL,
+    stack_trace   TEXT          DEFAULT NULL,
     FOREIGN KEY (current_state) REFERENCES query_states (state),
     FOREIGN KEY (desired_state) REFERENCES query_states (state),
     CHECK (desired_state IN ('Running', 'Stopped')),
@@ -114,15 +116,6 @@ CREATE TABLE IF NOT EXISTS query_changelog
     FOREIGN KEY (desired_state) REFERENCES query_states (state)
 );
 
-CREATE TABLE IF NOT EXISTS deployed_sources
-(
-    query_id           TEXT    NOT NULL,
-    physical_source_id INTEGER NOT NULL,
-    PRIMARY KEY (query_id, physical_source_id),
-    FOREIGN KEY (query_id) REFERENCES active_queries (id) ON DELETE CASCADE,
-    FOREIGN KEY (physical_source_id) REFERENCES physical_sources (id) ON DELETE RESTRICT
-);
-
 CREATE TABLE IF NOT EXISTS query_fragment_states
 (
     state TEXT PRIMARY KEY NOT NULL
@@ -130,25 +123,20 @@ CREATE TABLE IF NOT EXISTS query_fragment_states
 
 CREATE TABLE IF NOT EXISTS query_fragments
 (
-    query_id      TEXT    NOT NULL,
-    host_name     TEXT    NOT NULL,
-    grpc_port     INTEGER NOT NULL CHECK (grpc_port BETWEEN 1 AND 65535),
-    current_state TEXT    NOT NULL DEFAULT 'Pending',
-    desired_state TEXT    NOT NULL DEFAULT 'Running',
-    plan          JSON    NOT NULL,
-    PRIMARY KEY (query_id, host_name, grpc_port),
-    FOREIGN KEY (query_id) REFERENCES active_queries (id) ON DELETE RESTRICT,
-    FOREIGN KEY (host_name, grpc_port) REFERENCES workers (host_name, grpc_port) ON DELETE RESTRICT,
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_id            TEXT    NOT NULL,
+    placement_host_name TEXT    NOT NULL,
+    placement_grpc_port INTEGER NOT NULL CHECK (placement_grpc_port BETWEEN 1 AND 65535),
+    current_state       TEXT    NOT NULL DEFAULT 'Pending',
+    desired_state       TEXT    NOT NULL DEFAULT 'Running',
+    plan                JSON    NOT NULL,
+    has_source          BOOLEAN NOT NULL,
+    used_capacity       INTEGER NOT NULL CHECK (used_capacity >= 0), -- Sources/sinks don't consume capacity currently, so 0 would be valid
+    error               TEXT             DEFAULT NULL,
+    stack_trace         TEXT             DEFAULT NULL,
+    FOREIGN KEY (query_id) REFERENCES active_queries (id) ON DELETE CASCADE,
+    FOREIGN KEY (placement_host_name, placement_grpc_port) REFERENCES workers (host_name, grpc_port) ON DELETE RESTRICT,
     FOREIGN KEY (current_state) REFERENCES query_fragment_states (state),
     FOREIGN KEY (desired_state) REFERENCES query_fragment_states (state),
     CHECK (desired_state IN ('Running', 'Stopped'))
-);
-
-CREATE TABLE IF NOT EXISTS deployed_sinks
-(
-    query_id  TEXT NOT NULL,
-    sink_name TEXT NOT NULL,
-    PRIMARY KEY (query_id, sink_name),
-    FOREIGN KEY (query_id) REFERENCES active_queries (id) ON DELETE CASCADE,
-    FOREIGN KEY (sink_name) REFERENCES sinks (name) ON DELETE RESTRICT
 );

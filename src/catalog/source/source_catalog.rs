@@ -6,7 +6,7 @@ use crate::catalog::source::logical_source::{
 use crate::catalog::source::physical_source::{
     CreatePhysicalSource, DropPhysicalSource, GetPhysicalSource, PhysicalSource,
 };
-use crate::catalog::tables::{deployed_sources, logical_sources, physical_sources, table};
+use crate::catalog::tables::{logical_sources, physical_sources, table};
 use crate::catalog::worker::endpoint::HostName;
 use std::sync::Arc;
 use thiserror::Error;
@@ -182,18 +182,12 @@ impl SourceCatalog {
         let (stmt, args) = drop_physical.to_sql();
         self.db.delete_many(&stmt, args).await.map_err(|e| {
             // Transform FK constraint violations
-            // Note: For physical sources, the FK violation would come from deployed_sources table
-            // Since DropPhysicalSource can match multiple sources, we can't easily do proactive
-            // checking with full query lists. The error message will guide users.
-            if let Some(constraint) = inspect_constraint(&e) {
-                if constraint.contains(table::DEPLOYED_SOURCES)
-                    || constraint.contains(deployed_sources::PHYSICAL_SOURCE_ID)
-                {
-                    // We can't easily get the specific physical source ID and query list here
-                    // without re-querying, so we'll provide a generic helpful message
-                    // The user could enhance this with proactive checking if needed
-                    return SourceCatalogErr::Database(e);
-                }
+            // TODO: Add constraint checking when deployed_sources table is added
+            if let Some(_constraint) = inspect_constraint(&e) {
+                // We can't easily get the specific physical source ID and query list here
+                // without re-querying, so we'll provide a generic helpful message
+                // The user could enhance this with proactive checking if needed
+                return SourceCatalogErr::Database(e);
             }
             e.into()
         })

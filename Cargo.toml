@@ -1,10 +1,18 @@
+[workspace]
+members = [".", "crates/test-utils"]
+
 [package]
 name = "coordinator"
 version = "0.1.0"
 edition = "2021"
 authors = ["Yannik Schroeder <yannik.schroeder@tu-berlin.de>"]
 
+[features]
+arbitrary = ["dep:proptest", "dep:proptest-derive"]
+
 [dependencies]
+proptest = { version = "1.9.0", optional = true }
+proptest-derive = { version = "0.5.1", optional = true }
 madsim = { version = "0.2.34", features = ["macros", "rpc"] }
 
 tonic = { version = "0.5.1", package = "madsim-tonic" }
@@ -38,6 +46,7 @@ anyhow = "1.0.100"
 [dev-dependencies]
 proptest = "1.9.0"
 proptest-derive = "0.5.1"
+coordinator-test-utils = { path = "crates/test-utils" }
 
 [dependencies.uuid]
 version = "1.10"

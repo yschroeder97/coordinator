@@ -1,8 +1,8 @@
 INSERT INTO query_states (state)
 VALUES ('Pending'),
-       ('Deploying'),
+       ('Planned'),
+       ('Registered'),
        ('Running'),
-       ('Terminating'),
        ('Completed'),
        ('Stopped'),
        ('Failed');

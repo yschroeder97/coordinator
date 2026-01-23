@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio_retry::strategy::{jitter, FixedInterval};
-use tokio_retry::{Retry, RetryIf};
+use tokio_retry::RetryIf;
 
 const SQLITE_BUSY_CODE: &str = "5";
 const SQLITE_LOCKED_CODE: &str = "6";

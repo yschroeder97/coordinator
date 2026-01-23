@@ -1,9 +1,9 @@
-#[cfg(test)]
+#[cfg(feature = "arbitrary")]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 #[derive(Copy, Debug, Clone, Serialize, Deserialize, EnumIter)]
 pub enum DataType {
     UINT8,
@@ -23,7 +23,7 @@ pub enum DataType {
 
 pub type FieldName = String;
 pub type AttributeField = (FieldName, DataType);
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Schema {
     fields: Vec<AttributeField>,

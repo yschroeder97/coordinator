@@ -2,10 +2,10 @@ use crate::catalog::notification::Notifier;
 use crate::catalog::worker::endpoint::GrpcAddr;
 use crate::catalog::worker::worker_catalog::WorkerCatalog;
 use crate::catalog::worker::WorkerState;
-use crate::network::cluster_service::WorkerStateInternal::Connecting;
-use crate::network::poly_join_set::{AbortHandle, JoinSet};
-use crate::network::worker_client::{Rpc, WorkerClient, WorkerClientErr};
-use crate::network::worker_registry::{WorkerRegistry, WorkerRegistryHandle};
+use crate::cluster_controller::cluster_service::WorkerStateInternal::Connecting;
+use crate::cluster_controller::poly_join_set::{AbortHandle, JoinSet};
+use crate::cluster_controller::worker_client::{Rpc, WorkerClient, WorkerClientErr};
+use crate::cluster_controller::worker_registry::{WorkerRegistry, WorkerRegistryHandle};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::debug;
@@ -74,7 +74,7 @@ impl ClusterService {
         for mismatch in mismatched_workers {
             let addr = GrpcAddr::new(mismatch.host_name, mismatch.grpc_port);
 
-            let mut should_delete = false;
+            let should_delete = false;
             self.workers
                 .entry(addr.clone())
                 .and_modify(|state| {
@@ -87,12 +87,10 @@ impl ClusterService {
                             debug!("Aborted pending connection for worker {}", addr);
                         }
                         WorkerStateInternal::Connecting { .. }
-                            if mismatch.desired_state == WorkerState::Active =>
-                        {
-                        }
+                            if mismatch.desired_state == WorkerState::Active => {}
                         // Dropping the client here will lead to SendErr's in query reconcilers/worker registry
                         WorkerStateInternal::Active { addr, .. } => {
-                            self.registry.unregister(addr);
+                            self.registry.unregister(&addr);
                             info!("Removed active worker {}", addr);
                         }
                         _ => panic!(

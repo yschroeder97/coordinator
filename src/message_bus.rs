@@ -14,7 +14,6 @@ impl CoordinatorReceiver {
 }
 
 pub fn message_bus(capacity: usize) -> (CoordinatorHandle, CoordinatorReceiver) {
-    assert!(capacity > 0, "Batch size must be greater than 0");
     let (tx, rx) = flume::bounded(capacity);
 
     (tx, CoordinatorReceiver { receiver: rx })

@@ -7,9 +7,6 @@ use crate::catalog::worker::worker_catalog::WorkerCatalog;
 use sqlx::SqlitePool;
 use std::env;
 use std::sync::Arc;
-use crate::catalog::query::{FragmentState, QueryState};
-use crate::catalog::tables::{query_fragment_states, query_states, table, worker_states};
-use crate::catalog::worker::WorkerState;
 
 pub mod catalog_errors;
 mod database;
@@ -20,8 +17,6 @@ pub mod sink;
 pub mod source;
 pub mod tables;
 pub mod worker;
-#[cfg(test)]
-pub mod test_utils;
 
 pub struct Catalog {
     pub source: Arc<SourceCatalog>,
@@ -47,11 +42,12 @@ impl Catalog {
             reason: format!("DATABASE_URL not set: {}", e),
         })?;
 
-        let pool = SqlitePool::connect(&database_url)
-            .await
-            .map_err(|e| CatalogErr::ConnectionError {
-                reason: e.to_string(),
-            })?;
+        let pool =
+            SqlitePool::connect(&database_url)
+                .await
+                .map_err(|e| CatalogErr::ConnectionError {
+                    reason: e.to_string(),
+                })?;
 
         let db = Database::from_pool(pool)
             .await
@@ -96,7 +92,8 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::query::{FragmentState, QueryState};
+    use crate::catalog::query::fragment::FragmentState;
+    use crate::catalog::query::query_state::QueryState;
     use crate::catalog::tables::{query_fragment_states, query_states, table, worker_states};
     use crate::catalog::worker::WorkerState;
     use sqlx::{Sqlite, SqlitePool};

@@ -3,7 +3,7 @@ use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
 use crate::catalog::source::schema::Schema;
 use crate::catalog::tables::{logical_sources, table};
 use crate::request::Request;
-#[cfg(test)]
+#[cfg(feature = "arbitrary")]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteArguments;
@@ -17,7 +17,7 @@ pub struct LogicalSource {
     pub schema: Schema,
 }
 
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 #[derive(Clone, Debug)]
 pub struct CreateLogicalSource {
     pub source_name: LogicalSourceName,

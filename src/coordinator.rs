@@ -1,4 +1,3 @@
-use crate::catalog::catalog_errors::CatalogErr;
 use crate::catalog::query::{CreateQueryRequest, DropQueryRequest, GetQueryRequest};
 use crate::catalog::sink::{CreateSinkRequest, DropSinkRequest, GetSinkRequest};
 use crate::catalog::source::logical_source::GetLogicalSourceRequest;
@@ -11,10 +10,9 @@ use crate::catalog::source::physical_source::{
 };
 use crate::catalog::worker::{CreateWorkerRequest, DropWorkerRequest, GetWorkerRequest};
 use crate::catalog::Catalog;
-use crate::controller::query_service::QueryService;
+use crate::query_controller::query_service::QueryService;
 pub use crate::message_bus::{message_bus, CoordinatorHandle, CoordinatorReceiver};
-use crate::network::cluster_service::ClusterService;
-use tracing::debug;
+use crate::cluster_controller::cluster_service::ClusterService;
 use tracing::{info, info_span, Instrument};
 
 #[derive(Debug)]
@@ -54,7 +52,7 @@ macro_rules! dispatch {
         match $msg {
             $(
                 CoordinatorRequest::$variant(req) => {
-                    debug!("Received: {req:?}");
+                    info!("Received: {req:?}");
                     let crate::request::Request { payload, reply_to } = req;
                     let _ = reply_to.send(
                         $catalog.$field.$method(&payload).await

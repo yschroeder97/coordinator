@@ -1,8 +1,9 @@
-use crate::catalog::query::{FragmentId, StopMode};
+use crate::catalog::query::fragment::FragmentId;
+use crate::catalog::query::StopMode;
 use crate::catalog::worker::endpoint::GrpcAddr;
-use crate::network::worker_client::worker_rpc_service::worker_rpc_service_client::WorkerRpcServiceClient;
-use crate::network::worker_client::worker_rpc_service::{
-    QueryStatusReply, QueryStatusRequest, RegisterQueryReply, RegisterQueryRequest,
+use crate::cluster_controller::worker_client::worker_rpc_service::worker_rpc_service_client::WorkerRpcServiceClient;
+use crate::cluster_controller::worker_client::worker_rpc_service::{
+    QueryStatusRequest, RegisterQueryReply, RegisterQueryRequest,
     StartQueryRequest, StopQueryRequest, UnregisterQueryRequest, WorkerStatusRequest,
     WorkerStatusResponse,
 };
@@ -18,21 +19,32 @@ mod worker_rpc_service {
     tonic::include_proto!("worker_rpc");
 }
 
+// Re-export proto types needed by other modules
+pub use worker_rpc_service::QueryStatusReply;
+pub use worker_rpc_service::Error as FragmentError;
+
 #[derive(Error, Debug)]
 pub(crate) enum WorkerClientErr {
     #[error("Failed to connect to {1}: {0}")]
     Connection(tonic::transport::Error, GrpcAddr),
 
-    #[error("gRPC error at '{0}'")]
-    GrpcError(GrpcAddr),
+    #[error("gRPC error at '{addr}': {status}")]
+    GrpcError {
+        addr: GrpcAddr,
+        status: tonic::Status,
+    },
 }
 
 impl WorkerClientErr {
     pub fn addr(&self) -> &GrpcAddr {
         match self {
             WorkerClientErr::Connection(_, addr) => addr,
-            WorkerClientErr::GrpcError(addr) => addr,
+            WorkerClientErr::GrpcError { addr, .. } => addr,
         }
+    }
+
+    pub fn grpc_error(addr: GrpcAddr, status: tonic::Status) -> Self {
+        WorkerClientErr::GrpcError { addr, status }
     }
 }
 
@@ -91,23 +103,17 @@ impl WorkerClient {
     ) -> Result<(flume::Sender<Rpc>, WorkerClient), WorkerClientErr> {
         info!("Attempting to connect");
 
-        let endpoint = Endpoint::from_shared(format!("http://{}", grpc_addr)).map_err(|e| {
-            WorkerClientErr::Connection(e, grpc_addr.clone())
-        })?
-        .http2_keep_alive_interval(Duration::from_secs(
-            Self::ENDPOINT_KEEP_ALIVE_INTERVAL_SEC,
-        ))
-        .keep_alive_timeout(Duration::from_secs(Self::ENDPOINT_KEEP_ALIVE_TIMEOUT_SEC))
-        .connect_timeout(Duration::from_secs(5));
+        let endpoint = Endpoint::from_shared(format!("http://{}", grpc_addr))
+            .map_err(|e| WorkerClientErr::Connection(e, grpc_addr.clone()))?
+            .http2_keep_alive_interval(Duration::from_secs(Self::ENDPOINT_KEEP_ALIVE_INTERVAL_SEC))
+            .keep_alive_timeout(Duration::from_secs(Self::ENDPOINT_KEEP_ALIVE_TIMEOUT_SEC))
+            .connect_timeout(Duration::from_secs(5));
 
         let channel = Retry::spawn(connect_retry_strategy(), || async {
-            endpoint
-                .connect()
-                .await
-                .map_err(|e| {
-                    info!("Retrying connection establishment");
-                    WorkerClientErr::Connection(e, grpc_addr.clone())
-                })
+            endpoint.connect().await.map_err(|e| {
+                info!("Retrying connection establishment");
+                WorkerClientErr::Connection(e, grpc_addr.clone())
+            })
         })
         .await?;
         info!("Established connection");
@@ -133,7 +139,7 @@ impl WorkerClient {
                     reply_to(
                         $tx,
                         res.map(|resp| resp.into_inner())
-                            .map_err(|_| WorkerClientErr::GrpcError(addr)),
+                            .map_err(|status| WorkerClientErr::grpc_error(addr, status)),
                     );
                 });
             };
@@ -144,7 +150,7 @@ impl WorkerClient {
                     reply_to(
                         $tx,
                         res.map(|_| ())
-                            .map_err(|_| WorkerClientErr::GrpcError(addr)),
+                            .map_err(|status| WorkerClientErr::grpc_error(addr, status)),
                     );
                 });
             };

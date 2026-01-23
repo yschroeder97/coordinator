@@ -4,7 +4,7 @@ use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
 use crate::catalog::tables::{physical_sources, table};
 use crate::catalog::worker::endpoint::{HostName, NetworkAddr};
 use crate::request::Request;
-#[cfg(test)]
+#[cfg(feature = "arbitrary")]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteArguments;
@@ -13,7 +13,7 @@ use strum::EnumIter;
 
 pub type PhysicalSourceId = i64;
 
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, sqlx::Type, EnumIter)]
 #[sqlx(type_name = "TEXT")]
 pub enum SourceType {

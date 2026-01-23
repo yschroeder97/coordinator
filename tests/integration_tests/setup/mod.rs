@@ -1,4 +1,4 @@
-#![cfg(madsim)]
+// #![cfg(madsim)]
 use crate::worker::worker_rpc_service::worker_rpc_service_server::WorkerRpcServiceServer;
 use crate::worker::SingleNodeWorker;
 use anyhow::Result;
@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 use tonic::transport::Server;
+use tracing::info;
 
 const COORDINATOR_IP: &str = "192.168.1.1";
 
@@ -90,6 +91,7 @@ impl Cluster {
                 .name(format!("worker-{i}"))
                 .ip(format!("192.168.2.{i}").parse().unwrap())
                 .init(move || async move {
+                    info!("worker-{i} starting");
                     let worker = SingleNodeWorker::default();
                     let svc = WorkerRpcServiceServer::new(worker);
 

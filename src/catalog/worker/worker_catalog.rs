@@ -5,11 +5,10 @@ use crate::catalog::notification::Notifier;
 use crate::catalog::query_builder::ToSql;
 use crate::catalog::tables::table;
 use sqlx::sqlite::SqliteArguments;
-use sqlx::{Execute, QueryBuilder};
+use sqlx::QueryBuilder;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::watch;
-use tracing::info;
 
 #[derive(Error, Debug)]
 pub enum WorkerCatalogErr {
@@ -70,7 +69,7 @@ impl WorkerCatalog {
 
             self.db.execute(query).await?;
         } else {
-            // If there are peers, use a transaction to insert both worker and network links atomically
+            // If there are peers, use a transaction to insert both worker and cluster_controller links atomically
             let worker = worker.clone();
 
             self.db
@@ -105,7 +104,6 @@ impl WorkerCatalog {
                 })
                 .await?;
         }
-
         self.notify();
         Ok(())
     }

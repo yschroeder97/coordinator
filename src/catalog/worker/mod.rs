@@ -5,7 +5,7 @@ use crate::catalog::catalog_errors::CatalogErr;
 use crate::catalog::query_builder::UpdateBuilder;
 use crate::catalog::query_builder::{SqlOperation, ToSql, WhereBuilder};
 use crate::catalog::tables::{table, workers};
-use crate::catalog::worker::endpoint::{GrpcAddr, HostAddr, HostName};
+use crate::catalog::worker::endpoint::{GrpcAddr, HostAddr, HostName, NetworkAddr};
 use crate::request::Request;
 use sqlx::sqlite::SqliteArguments;
 use strum::{Display, EnumIter};
@@ -40,6 +40,12 @@ pub struct CreateWorker {
     pub peers: Vec<HostAddr>,
 }
 pub type CreateWorkerRequest = Request<CreateWorker, Result<(), CatalogErr>>;
+
+impl CreateWorker {
+    pub(crate) fn grpc_addr(&self) -> GrpcAddr {
+        NetworkAddr::new(self.host_name.clone(), self.grpc_port)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct DropWorker {

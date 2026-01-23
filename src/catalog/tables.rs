@@ -19,10 +19,8 @@ pub mod table {
     pub const ACTIVE_QUERIES: &str = "active_queries";
     pub const TERMINATED_QUERIES: &str = "terminated_queries";
     pub const QUERY_CHANGELOG: &str = "query_changelog";
-    pub const DEPLOYED_SOURCES: &str = "deployed_sources";
     pub const QUERY_FRAGMENT_STATES: &str = "query_fragment_states";
     pub const QUERY_FRAGMENTS: &str = "query_fragments";
-    pub const DEPLOYED_SINKS: &str = "deployed_sinks";
 }
 
 // =============================================================================
@@ -95,6 +93,8 @@ pub mod active_queries {
     pub const CURRENT_STATE: &str = "current_state";
     pub const DESIRED_STATE: &str = "desired_state";
     pub const STOP_MODE: &str = "stop_mode";
+    pub const ERROR: &str = "error";
+    pub const STACK_TRACE: &str = "stack_trace";
 }
 
 pub mod terminated_queries {
@@ -113,11 +113,6 @@ pub mod query_changelog {
     pub const DESIRED_STATE: &str = "desired_state";
 }
 
-pub mod deployed_sources {
-    pub const QUERY_ID: &str = "query_id";
-    pub const PHYSICAL_SOURCE_ID: &str = "physical_source_id";
-}
-
 pub mod query_fragment_states {
     pub const STATE: &str = "state";
 }
@@ -129,9 +124,5 @@ pub mod query_fragments {
     pub const CURRENT_STATE: &str = "current_state";
     pub const DESIRED_STATE: &str = "desired_state";
     pub const PLAN: &str = "plan";
-}
-
-pub mod deployed_sinks {
-    pub const QUERY_ID: &str = "query_id";
-    pub const SINK_NAME: &str = "sink_name";
+    pub const USED_CAPACITY: &str = "used_capacity";
 }

@@ -1,5 +1,5 @@
 use http::Uri;
-#[cfg(test)]
+#[cfg(feature = "arbitrary")]
 use proptest_derive::Arbitrary;
 use std::fmt;
 use std::str::FromStr;
@@ -11,7 +11,7 @@ pub type GrpcAddr = NetworkAddr;
 pub const DEFAULT_GRPC_PORT: u16 = 8080;
 pub const DEFAULT_DATA_PORT: u16 = 9090;
 
-#[cfg(test)]
+#[cfg(feature = "arbitrary")]
 fn arb_host_name() -> impl proptest::strategy::Strategy<Value = String> {
     use proptest::prelude::*;
     prop_oneof![
@@ -26,12 +26,12 @@ fn arb_host_name() -> impl proptest::strategy::Strategy<Value = String> {
     ]
 }
 
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct NetworkAddr {
-    #[cfg_attr(test, proptest(strategy = "arb_host_name()"))]
+    #[cfg_attr(feature = "arbitrary", proptest(strategy = "arb_host_name()"))]
     pub host: HostName,
-    #[cfg_attr(test, proptest(strategy = "1..u16::MAX"))]
+    #[cfg_attr(feature = "arbitrary", proptest(strategy = "1..u16::MAX"))]
     pub port: u16,
 }
 
@@ -78,5 +78,11 @@ impl FromStr for NetworkAddr {
         let port = authority.port_u16().ok_or("Missing port")?;
 
         Ok(NetworkAddr { host, port })
+    }
+}
+
+impl<'a> From<&'a str> for NetworkAddr {
+    fn from(s: &'a str) -> Self {
+        NetworkAddr::from_str(s).expect("Invalid NetworkAddr string")
     }
 }
