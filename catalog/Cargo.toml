@@ -1,0 +1,17 @@
+[package]
+name = "catalog"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+model.workspace = true
+migration.workspace = true
+tokio.workspace = true
+tokio-retry.workspace = true
+sea-orm.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+model = { workspace = true, features = ["testing"] }
+proptest = "1.5"

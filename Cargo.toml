@@ -1,23 +1,14 @@
 [workspace]
-members = [".", "crates/test-utils"]
+resolver = "3"
+members = [
+    "coordinator",
+    "model",
+    "catalog",
+    "reconciler",
+    "migration"
+]
 
-[package]
-name = "coordinator"
-version = "0.1.0"
-edition = "2021"
-authors = ["Yannik Schroeder <yannik.schroeder@tu-berlin.de>"]
-
-[features]
-arbitrary = ["dep:proptest", "dep:proptest-derive"]
-
-[dependencies]
-proptest = { version = "1.9.0", optional = true }
-proptest-derive = { version = "0.5.1", optional = true }
-madsim = { version = "0.2.34", features = ["macros", "rpc"] }
-
-tonic = { version = "0.5.1", package = "madsim-tonic" }
-prost = { version = "0.13" }
-
+[workspace.dependencies]
 tokio = { version = "0.2", package = "madsim-tokio", features = [
     "rt",
     "rt-multi-thread",
@@ -25,37 +16,38 @@ tokio = { version = "0.2", package = "madsim-tokio", features = [
     "macros",
     "time",
 ] }
-
-sqlx = { version = "0.8.2", features = ["sqlite", "runtime-tokio", "macros", "json", "chrono"] }
-
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-flume = "0.12"
+tokio-retry = "0.3.0"
+tracing = "0.1.44"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.145"
-http = "1.4.0"
-toml = "0.9.8"
-tokio-retry = "0.3.0"
 thiserror = "2.0.17"
+anyhow = "1.0"
+sea-orm = { version = "2.0.0-rc", features = [
+    "sqlx-sqlite",
+    "runtime-tokio",
+    "macros",
+    "debug-print",
+    "with-json"
+] }
 strum = { version = "0.27.2", features = ["derive"] }
-futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
+http = "1.4.0"
+uuid = { version = "1.20.0", features = ["v4"] }
+madsim = { version = "0.2.34", features = ["macros"] }
+tonic = { version = "0.5.1", package = "madsim-tonic" }
+prost = "0.13"
+flume = "0.12"
+itertools = "0.14"
+tonic-build = { version = "0.5", package = "madsim-tonic-build" }
 
-anyhow = "1.0.100"
+catalog = { path = "catalog" }
+reconciler = { path = "reconciler" }
+coordinator = { path = "coordinator" }
+migration = { path = "migration" }
+model = { path = "model" }
 
-[dev-dependencies]
-proptest = "1.9.0"
-proptest-derive = "0.5.1"
-coordinator-test-utils = { path = "crates/test-utils" }
-
-[dependencies.uuid]
-version = "1.10"
-features = ["v4"]
-
-[patch.crates-io]
+[workspace.patch.crates-io]
 sqlx = { git = "https://github.com/madsim-rs/sqlx.git", rev = "3efe6d0065963db2a2b7f30dee69f647e28dec81" }
 tokio-retry = { git = "https://github.com/madsim-rs/rust-tokio-retry.git", rev = "95e2fd3" }
 getrandom = { git = "https://github.com/madsim-rs/getrandom.git", rev = "e79a7ae" }
 
-[build-dependencies]
-tonic-build = { version = "0.5", package = "madsim-tonic-build" }
