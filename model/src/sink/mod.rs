@@ -19,7 +19,7 @@ pub struct Model {
     pub config: Json,
 }
 
-#[derive(Copy, Clone, Debug, sea_orm::EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
         belongs_to = "crate::worker::Entity",
@@ -136,7 +136,12 @@ impl crate::IntoCondition for DropSink {
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Display, Serialize, Deserialize, DeriveActiveEnum, EnumIter,
 )]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "sink_type", rename_all = "PascalCase")]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "sink_type",
+    rename_all = "PascalCase"
+)]
 pub enum SinkType {
     File,
     Print,

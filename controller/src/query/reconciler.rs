@@ -8,13 +8,13 @@ use crate::query::planned::Planned;
 use crate::query::registered::Registered;
 use crate::query::running::Running;
 use crate::query::terminated::Terminated;
-use catalog::query_catalog::QueryCatalog;
+use catalog::Catalog;
+use model::query;
 use model::query::fragment::FragmentId;
 use model::query::*;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::info;
-use model::query::query_state::QueryState;
 
 pub(crate) enum State {
     Pending(Pending),
@@ -26,20 +26,15 @@ pub(crate) enum State {
     Failed(Terminated),
 }
 
-#[derive(Debug)]
-pub struct QueryError {
-    transitioned_to: QueryState,
-    
-}
-
 pub trait Transition {
     async fn transition(self, ctx: QueryContext) -> State;
 }
 
 pub struct QueryContext {
-    pub query_catalog: Arc<QueryCatalog>,
+    pub query: query::Model,
+    pub catalog: Arc<Catalog>,
     pub worker_registry: WorkerRegistryHandle,
-    stop_listener: flume::Receiver<StopMode>,
+    pub stop_listener: flume::Receiver<StopMode>,
 }
 
 impl QueryContext {
@@ -114,7 +109,7 @@ impl QueryContext {
 pub struct QueryReconciler;
 
 impl QueryReconciler {
-    pub async fn run(query: active_query::Model, ctx: QueryContext) {
+    pub async fn run(query: query::Model, ctx: QueryContext) {
         info!("Starting");
     }
 }

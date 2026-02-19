@@ -12,3 +12,4 @@ use sea_orm::Condition;
 pub trait IntoCondition {
     fn into_condition(self) -> Condition;
 }
+

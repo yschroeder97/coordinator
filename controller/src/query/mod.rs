@@ -5,3 +5,5 @@ mod registered;
 mod running;
 pub mod service;
 mod terminated;
+
+pub type QueryId = i64;

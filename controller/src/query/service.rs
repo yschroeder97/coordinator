@@ -1,10 +1,12 @@
 use crate::cluster::worker_registry::WorkerRegistryHandle;
-use crate::query::reconciler::QueryReconciler;
+use crate::query::reconciler::{QueryContext, QueryReconciler};
 use catalog::NotifiableCatalog;
 use catalog::query_catalog::QueryCatalog;
 use model::query::query_state::DesiredQueryState;
 use model::query::*;
 
+use crate::query::QueryId;
+use model::query;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,7 +59,7 @@ impl QueryService {
             match self.tasks.get(&mismatch.id) {
                 // Mismatch has a task
                 Some((stop_channel, _)) => match mismatch.desired_state {
-                    DesiredQueryState::Running | DesiredQueryState::Completed => {
+                    DesiredQueryState::Completed => {
                         debug!("Reconciliation task for {mismatch:?} is already running");
                     }
                     DesiredQueryState::Stopped => {
@@ -72,16 +74,18 @@ impl QueryService {
         }
     }
 
-    fn spawn_reconciliation_task(&mut self, mismatch: active_query::Model) {
+    fn spawn_reconciliation_task(&mut self, mismatch: query::Model) {
         let (stop_controller, stop_listener) = flume::bounded(1);
         let query_id = mismatch.id.clone();
 
         let handle = tokio::spawn(
             QueryReconciler::run(
                 mismatch,
-                self.query_catalog.clone(),
-                self.worker_registry.clone(),
-                stop_listener,
+                QueryContext {
+                    query_catalog: self.query_catalog.clone(),
+                    worker_registry: self.worker_registry.clone(),
+                    stop_listener,
+                },
             )
             .instrument(info_span!("query_reconciler")),
         );
@@ -90,7 +94,7 @@ impl QueryService {
 
     async fn send_stop_signal(
         &self,
-        query_to_stop: &active_query::Model,
+        query_to_stop: &query::Model,
         stop_channel: &flume::Sender<StopMode>,
     ) {
         stop_channel

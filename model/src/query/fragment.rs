@@ -1,18 +1,27 @@
+use crate::query::QueryName;
 use crate::query::query_state::QueryState;
-use crate::query::{QueryId, active_query};
 use crate::worker::endpoint::{GrpcAddr, HostAddr};
 use sea_orm::entity::prelude::*;
 use sea_orm::{NotSet, Set};
 use serde::{Deserialize, Serialize};
 use strum::Display;
+use thiserror::Error;
 
 pub type FragmentId = i64;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
-pub struct FragmentError {
-    code: u64,
-    msg: String,
-    trace: String,
+#[derive(Debug, Clone, Error, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
+pub enum FragmentError {
+    #[error(
+        "Internal worker error; code: {code}, msg: {msg}, stacktrace: {trace}, location: {location}"
+    )]
+    InternalWorkerError {
+        code: u64,
+        msg: String,
+        trace: String,
+        location: String,
+    },
+    #[error("Worker communication error: {msg}")]
+    WorkerCommunicationError { msg: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, DeriveEntityModel)]
@@ -20,16 +29,15 @@ pub struct FragmentError {
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: FragmentId,
-    pub query_id: QueryId,
+    pub query_id: i64,
     pub host_addr: HostAddr,
     pub grpc_addr: GrpcAddr,
     pub plan: serde_json::Value,
     pub used_capacity: i32,
     pub has_source: bool,
     pub current_state: FragmentState,
-    pub started_timestamp: Option<chrono::DateTime<chrono::Local>>,
-    pub running_timestamp: Option<chrono::DateTime<chrono::Local>>,
-    pub stopped_timestamp: Option<chrono::DateTime<chrono::Local>>,
+    pub start_timestamp: Option<chrono::DateTime<chrono::Local>>,
+    pub stop_timestamp: Option<chrono::DateTime<chrono::Local>>,
     #[sea_orm(column_type = "JsonBinary")]
     pub error: Option<FragmentError>,
 }
@@ -37,9 +45,9 @@ pub struct Model {
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
-        belongs_to = "crate::query::active_query::Entity",
+        belongs_to = "crate::query::Entity",
         from = "Column::QueryId",
-        to = "crate::query::active_query::Column::Id",
+        to = "crate::query::Column::Id",
         on_update = "Restrict",
         on_delete = "Cascade"
     )]
@@ -54,7 +62,7 @@ pub enum Relation {
     Worker,
 }
 
-impl Related<active_query::Entity> for Entity {
+impl Related<crate::query::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Query.def()
     }
@@ -70,7 +78,7 @@ impl ActiveModelBehavior for ActiveModel {}
 
 #[derive(Clone, Debug)]
 pub struct CreateFragment {
-    pub query_id: QueryId,
+    pub query_id: i64,
     pub host_addr: HostAddr,
     pub grpc_addr: GrpcAddr,
     pub plan: serde_json::Value,
@@ -89,9 +97,8 @@ impl From<CreateFragment> for ActiveModel {
             used_capacity: Set(req.used_capacity),
             has_source: Set(req.has_source),
             current_state: NotSet,
-            started_timestamp: NotSet,
-            running_timestamp: NotSet,
-            stopped_timestamp: NotSet,
+            start_timestamp: NotSet,
+            stop_timestamp: NotSet,
             error: NotSet,
         }
     }
@@ -141,14 +148,6 @@ impl From<i32> for FragmentState {
             _ => panic!("Tag {value} cannot be converted"),
         }
     }
-}
-
-/// Aggregated timestamps derived from a set of fragments.
-pub struct QueryTimestamps {
-    /// Earliest fragment start (query started when first fragment started).
-    pub start: Option<chrono::DateTime<chrono::Local>>,
-    /// Latest fragment stop (query stopped when last fragment finished).
-    pub stop: Option<chrono::DateTime<chrono::Local>>,
 }
 
 impl From<Vec<FragmentState>> for QueryState {

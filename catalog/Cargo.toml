@@ -7,10 +7,8 @@ edition = "2024"
 model.workspace = true
 migration.workspace = true
 tokio.workspace = true
-tokio-retry.workspace = true
 sea-orm.workspace = true
-tracing.workspace = true
-thiserror.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 model = { workspace = true, features = ["testing"] }

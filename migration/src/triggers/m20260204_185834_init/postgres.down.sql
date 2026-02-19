@@ -1,11 +1,8 @@
-DROP TRIGGER IF EXISTS release_worker_capacity ON fragment;
+DROP TRIGGER IF EXISTS release_worker_capacity ON query;
 DROP FUNCTION IF EXISTS release_worker_capacity();
 
-DROP TRIGGER IF EXISTS auto_archive_terminal_query ON active_query;
-DROP FUNCTION IF EXISTS auto_archive_terminal_query();
+DROP TRIGGER IF EXISTS reserve_worker_capacity ON fragment;
+DROP FUNCTION IF EXISTS reserve_worker_capacity();
 
-DROP TRIGGER IF EXISTS archive_active_query ON active_query;
-DROP FUNCTION IF EXISTS archive_active_query();
-
-DROP TRIGGER IF EXISTS validate_query_state_transition ON active_query;
+DROP TRIGGER IF EXISTS validate_query_state_transition ON query;
 DROP FUNCTION IF EXISTS validate_query_state_transition();

@@ -1,7 +1,6 @@
 pub mod endpoint;
 pub mod network_link;
 
-use crate::query::query_state::QueryState;
 use endpoint::{GrpcAddr, HostAddr};
 use network_link::Relation::{SourceWorker, TargetWorker};
 use sea_orm::ActiveValue::Set;
@@ -149,6 +148,10 @@ impl CreateWorker {
         self.block_until = state;
         self
     }
+
+    pub fn should_block(&self) -> bool {
+        self.block_until != WorkerState::Pending
+    }
 }
 
 impl From<CreateWorker> for ActiveModel {
@@ -171,7 +174,7 @@ pub struct GetWorker {
 }
 
 impl GetWorker {
-    pub fn new() -> Self {
+    pub fn all() -> Self {
         Self::default()
     }
 
@@ -217,5 +220,9 @@ impl DropWorker {
     pub fn blocking(mut self) -> Self {
         self.should_block = true;
         self
+    }
+
+    pub fn should_block(&self) -> bool {
+        self.should_block
     }
 }

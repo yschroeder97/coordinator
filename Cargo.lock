@@ -384,14 +384,12 @@ checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 name = "catalog"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "madsim-tokio",
  "migration",
  "model",
  "proptest",
  "sea-orm",
- "thiserror",
- "tokio-retry",
- "tracing",
 ]
 
 [[package]]
@@ -492,20 +490,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
-name = "coordinator"
+name = "controller"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "catalog",
  "flume 0.12.0",
- "itertools",
- "madsim",
  "madsim-tokio",
  "madsim-tonic",
  "madsim-tonic-build",
  "model",
  "prost",
- "reconciler",
+ "thiserror",
+ "tokio-retry",
+ "tracing",
+]
+
+[[package]]
+name = "coordinator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "catalog",
+ "controller",
+ "flume 0.12.0",
+ "madsim",
+ "madsim-tokio",
+ "madsim-tonic",
+ "model",
+ "proptest",
  "thiserror",
  "tracing",
 ]
@@ -2158,22 +2170,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f97cdb2a36ed4183de61b2f824cc45c9f1037f28afe0a322e9fff4c108b5aaa"
 dependencies = [
  "rand_core 0.6.4",
-]
-
-[[package]]
-name = "reconciler"
-version = "0.1.0"
-dependencies = [
- "catalog",
- "flume 0.12.0",
- "madsim-tokio",
- "madsim-tonic",
- "madsim-tonic-build",
- "model",
- "prost",
- "thiserror",
- "tokio-retry",
- "tracing",
 ]
 
 [[package]]

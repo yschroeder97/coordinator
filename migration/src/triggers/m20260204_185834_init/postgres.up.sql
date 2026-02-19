@@ -32,60 +32,45 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER validate_query_state_transition
     BEFORE UPDATE OF current_state
-    ON active_query
+    ON query
     FOR EACH ROW
     EXECUTE FUNCTION validate_query_state_transition();
 
--- Archive active query function and trigger
-CREATE OR REPLACE FUNCTION archive_active_query()
+-- Reserve worker capacity when a fragment is created
+CREATE OR REPLACE FUNCTION reserve_worker_capacity()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF OLD.current_state NOT IN ('Completed', 'Failed', 'Stopped') THEN
-        RAISE EXCEPTION 'Active query cannot be deleted; transition to Stopped, Completed, or Failed first.';
-    END IF;
-
-    INSERT INTO terminated_query (query_id, statement, termination_state, start_timestamp, stop_timestamp, stop_mode, error)
-    VALUES (OLD.id, OLD.statement, OLD.current_state, COALESCE(OLD.start_timestamp, CURRENT_TIMESTAMP), COALESCE(OLD.stop_timestamp, CURRENT_TIMESTAMP), OLD.stop_mode, OLD.error);
-
-    RETURN OLD;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER archive_active_query
-    BEFORE DELETE ON active_query
-    FOR EACH ROW
-    EXECUTE FUNCTION archive_active_query();
-
--- Auto-archive terminal query function and trigger
-CREATE OR REPLACE FUNCTION auto_archive_terminal_query()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.current_state IN ('Completed', 'Failed', 'Stopped') THEN
-        -- This delete will cascade to delete all fragments connected with this query
-        -- This, in turn, will release the worker capacity
-        DELETE FROM active_query WHERE id = NEW.id;
-    END IF;
+    UPDATE worker
+    SET capacity = capacity - NEW.used_capacity
+    WHERE host_addr = NEW.host_addr;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER auto_archive_terminal_query
-    AFTER UPDATE OF current_state ON active_query
+CREATE TRIGGER reserve_worker_capacity
+    AFTER INSERT ON fragment
     FOR EACH ROW
-    EXECUTE FUNCTION auto_archive_terminal_query();
+    EXECUTE FUNCTION reserve_worker_capacity();
 
--- Release worker capacity function and trigger
+-- Release all fragment capacity back to workers when query reaches terminal state
 CREATE OR REPLACE FUNCTION release_worker_capacity()
 RETURNS TRIGGER AS $$
 BEGIN
     UPDATE worker
-    SET capacity = capacity + OLD.used_capacity
-    WHERE host_addr = OLD.host_addr;
-    RETURN OLD;
+    SET capacity = capacity + COALESCE(sub.total, 0)
+    FROM (
+        SELECT host_addr, SUM(used_capacity) AS total
+        FROM fragment
+        WHERE query_id = NEW.id
+        GROUP BY host_addr
+    ) sub
+    WHERE worker.host_addr = sub.host_addr;
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER release_worker_capacity
-    BEFORE DELETE ON fragment
+    AFTER UPDATE OF current_state ON query
     FOR EACH ROW
+    WHEN (NEW.current_state IN ('Completed', 'Stopped', 'Failed'))
     EXECUTE FUNCTION release_worker_capacity();

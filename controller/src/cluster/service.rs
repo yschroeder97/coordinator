@@ -2,6 +2,7 @@ use crate::cluster::service::WorkerStateInternal::Connecting;
 use crate::cluster::poly_join_set::{AbortHandle, JoinSet};
 use crate::cluster::worker_client::{Rpc, WorkerClient, WorkerClientErr};
 use crate::cluster::worker_registry::{WorkerRegistry, WorkerRegistryHandle};
+use catalog::NotifiableCatalog;
 use catalog::worker_catalog::WorkerCatalog;
 use model::worker::endpoint::GrpcAddr;
 use model::worker::{DesiredWorkerState, WorkerState};
@@ -44,7 +45,7 @@ impl ClusterService {
     }
 
     pub async fn run(&mut self) {
-        let mut workers = self.worker_catalog.subscribe();
+        let mut workers = self.worker_catalog.subscribe_intent();
         info!("Starting");
         self.reconcile().await;
 

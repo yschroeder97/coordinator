@@ -6,16 +6,15 @@ edition = "2024"
 [dependencies]
 catalog.workspace = true
 model.workspace = true
-reconciler.workspace = true
+controller.workspace = true
 madsim.workspace = true
 tonic.workspace = true
-prost.workspace = true
 flume.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
-itertools.workspace = true
 
-[build-dependencies]
-tonic-build.workspace = true
+[dev-dependencies]
+model = { workspace = true, features = ["testing"] }
+proptest = "1.5"

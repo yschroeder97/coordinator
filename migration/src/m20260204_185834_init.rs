@@ -1,7 +1,8 @@
 use crate::triggers::m20260204_185834_init as triggers;
 use crate::{assert_not_has_tables, drop_tables};
 use model::query::StopMode;
-use model::query::query_state::{DesiredQueryState, QueryState, TerminationState};
+use model::query::fragment::FragmentState;
+use model::query::query_state::{DesiredQueryState, QueryState};
 use model::worker::{DesiredWorkerState, WorkerState};
 use sea_orm::DbBackend;
 use sea_orm_migration::prelude::{Index as MigrationIndex, Table as MigrationTable, *};
@@ -21,8 +22,7 @@ impl MigrationTrait for Migration {
             Worker,
             NetworkLink,
             Fragment,
-            ActiveQuery,
-            TerminatedQuery
+            Query
         );
 
         match manager.get_database_backend() {
@@ -213,53 +213,47 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 MigrationTable::create()
-                    .table(ActiveQuery::Table)
+                    .table(Query::Table)
                     .col(
-                        ColumnDef::new(ActiveQuery::Id)
-                            .string()
+                        ColumnDef::new(Query::Id)
+                            .big_integer()
                             .not_null()
+                            .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(ActiveQuery::Statement).string().not_null())
+                    .col(ColumnDef::new(Query::Name).string().not_null())
+                    .col(ColumnDef::new(Query::Statement).string().not_null())
                     .col(
-                        ColumnDef::new(ActiveQuery::CurrentState)
+                        ColumnDef::new(Query::CurrentState)
                             .string()
                             .not_null()
                             .default(QueryState::default().to_string()),
                     )
                     .col(
-                        ColumnDef::new(ActiveQuery::DesiredState)
+                        ColumnDef::new(Query::DesiredState)
                             .string()
                             .not_null()
                             .default(DesiredQueryState::default().to_string())
                             .check(
-                                Expr::col(ActiveQuery::DesiredState).is_in(
+                                Expr::col(Query::DesiredState).is_in(
                                     DesiredQueryState::iter()
                                         .map(|s| s.to_string())
                                         .collect::<Vec<_>>(),
                                 ),
                             ),
                     )
+                    .col(ColumnDef::new(Query::StartTimestamp).date_time().null())
+                    .col(ColumnDef::new(Query::StopTimestamp).date_time().null())
                     .col(
-                        ColumnDef::new(ActiveQuery::StartTimestamp)
-                            .date_time()
-                            .null(),
-                    )
-                    .col(
-                        ColumnDef::new(ActiveQuery::StopTimestamp)
-                            .date_time()
-                            .null(),
-                    )
-                    .col(
-                        ColumnDef::new(ActiveQuery::StopMode).string().null().check(
-                            Expr::col(ActiveQuery::StopMode)
+                        ColumnDef::new(Query::StopMode).string().null().check(
+                            Expr::col(Query::StopMode)
                                 .is_null()
-                                .or(Expr::col(ActiveQuery::StopMode).is_in(
+                                .or(Expr::col(Query::StopMode).is_in(
                                     StopMode::iter().map(|s| s.to_string()).collect::<Vec<_>>(),
                                 )),
                         ),
                     )
-                    .col(ColumnDef::new(ActiveQuery::Error).json().null())
+                    .col(ColumnDef::new(Query::Error).json().null())
                     .to_owned(),
             )
             .await?;
@@ -275,7 +269,7 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Fragment::QueryId).string().not_null())
+                    .col(ColumnDef::new(Fragment::QueryId).big_integer().not_null())
                     .col(ColumnDef::new(Fragment::HostAddr).string().not_null())
                     .col(ColumnDef::new(Fragment::GrpcAddr).string().not_null())
                     .col(ColumnDef::new(Fragment::Plan).json().not_null())
@@ -286,10 +280,19 @@ impl MigrationTrait for Migration {
                             .check(Expr::col(Fragment::UsedCapacity).gte(0)),
                     )
                     .col(ColumnDef::new(Fragment::HasSource).boolean().not_null())
+                    .col(
+                        ColumnDef::new(Fragment::CurrentState)
+                            .string()
+                            .not_null()
+                            .default(FragmentState::default().to_string()),
+                    )
+                    .col(ColumnDef::new(Fragment::StartTimestamp).date_time().null())
+                    .col(ColumnDef::new(Fragment::StopTimestamp).date_time().null())
+                    .col(ColumnDef::new(Fragment::Error).json().null())
                     .foreign_key(
                         ForeignKey::create()
                             .from(Fragment::Table, Fragment::QueryId)
-                            .to(ActiveQuery::Table, ActiveQuery::Id)
+                            .to(Query::Table, Query::Id)
                             .on_delete(ForeignKeyAction::Cascade)
                             .on_update(ForeignKeyAction::Restrict),
                     )
@@ -300,61 +303,6 @@ impl MigrationTrait for Migration {
                             .on_delete(ForeignKeyAction::Restrict)
                             .on_update(ForeignKeyAction::Restrict),
                     )
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_table(
-                MigrationTable::create()
-                    .table(TerminatedQuery::Table)
-                    .col(
-                        ColumnDef::new(TerminatedQuery::Id)
-                            .big_integer()
-                            .not_null()
-                            .auto_increment()
-                            .primary_key(),
-                    )
-                    .col(ColumnDef::new(TerminatedQuery::QueryId).string().not_null())
-                    .col(
-                        ColumnDef::new(TerminatedQuery::Statement)
-                            .string()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(TerminatedQuery::TerminationState)
-                            .string()
-                            .not_null()
-                            .default(TerminationState::default().to_string())
-                            .check(
-                                Expr::col(TerminatedQuery::TerminationState).is_in(
-                                    TerminationState::iter()
-                                        .map(|s| s.to_string())
-                                        .collect::<Vec<_>>(),
-                                ),
-                            ),
-                    )
-                    .col(
-                        ColumnDef::new(TerminatedQuery::StartTimestamp)
-                            .date_time()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(TerminatedQuery::StopTimestamp)
-                            .date_time()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(TerminatedQuery::StopMode)
-                            .string()
-                            .null()
-                            .check(Expr::col(TerminatedQuery::StopMode).is_null().or(
-                                Expr::col(TerminatedQuery::StopMode).is_in(
-                                    StopMode::iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                                ),
-                            )),
-                    )
-                    .col(ColumnDef::new(TerminatedQuery::Error).json().null())
                     .to_owned(),
             )
             .await?;
@@ -388,8 +336,7 @@ impl MigrationTrait for Migration {
             Worker,
             NetworkLink,
             Fragment,
-            ActiveQuery,
-            TerminatedQuery
+            Query
         );
         Ok(())
     }
@@ -449,28 +396,20 @@ enum Fragment {
     Plan,
     UsedCapacity,
     HasSource,
-}
-
-#[derive(DeriveIden)]
-enum ActiveQuery {
-    Table,
-    Id,
-    Statement,
     CurrentState,
-    DesiredState,
     StartTimestamp,
     StopTimestamp,
-    StopMode,
     Error,
 }
 
 #[derive(DeriveIden)]
-enum TerminatedQuery {
+enum Query {
     Table,
     Id,
-    QueryId,
+    Name,
     Statement,
-    TerminationState,
+    CurrentState,
+    DesiredState,
     StartTimestamp,
     StopTimestamp,
     StopMode,

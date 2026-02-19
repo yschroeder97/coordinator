@@ -4,7 +4,7 @@ members = [
     "coordinator",
     "model",
     "catalog",
-    "reconciler",
+    "controller",
     "migration"
 ]
 
@@ -41,7 +41,7 @@ itertools = "0.14"
 tonic-build = { version = "0.5", package = "madsim-tonic-build" }
 
 catalog = { path = "catalog" }
-reconciler = { path = "reconciler" }
+controller = { path = "controller" }
 coordinator = { path = "coordinator" }
 migration = { path = "migration" }
 model = { path = "model" }

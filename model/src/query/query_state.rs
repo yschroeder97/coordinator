@@ -14,6 +14,8 @@ use strum::{Display, EnumString, IntoEnumIterator};
     Display,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     EnumIter,
     EnumString,
     DeriveActiveEnum,
@@ -62,7 +64,6 @@ pub enum QueryState {
 #[strum(serialize_all = "PascalCase")]
 pub enum DesiredQueryState {
     #[default]
-    Running,
     Completed,
     Stopped,
 }

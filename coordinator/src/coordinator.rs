@@ -1,10 +1,13 @@
-use crate::message_bus::{CoordinatorHandle, CoordinatorReceiver, message_bus};
-use crate::request_listener::RequestListener;
+use crate::request_handler::RequestHandler;
 use anyhow::Result;
 use catalog::Catalog;
 use catalog::database::StateBackend;
-use model::query::{CreateQuery, DropQuery, GetQuery, Query, StopQuery};
-use model::query::{active_query, terminated_query};
+use controller::cluster::service::ClusterService;
+use controller::into_request;
+use controller::query::service::QueryService;
+use controller::request::Request;
+use model::query;
+use model::query::{CreateQuery, DropQuery, GetQuery};
 use model::sink::{self, CreateSink, DropSink, GetSink};
 use model::source::logical_source::{
     self, CreateLogicalSource, DropLogicalSource, GetLogicalSource,
@@ -13,33 +16,27 @@ use model::source::physical_source::{
     self, CreatePhysicalSource, DropPhysicalSource, GetPhysicalSource,
 };
 use model::worker::{self, CreateWorker, DropWorker, GetWorker};
-use reconciler::cluster::service::ClusterService;
-use reconciler::into_request;
-use reconciler::query::service::QueryService;
-use reconciler::request::Request;
 use tracing::{Instrument, info, info_span};
 
 pub type CreateLogicalSourceRequest = Request<CreateLogicalSource, Result<logical_source::Model>>;
 pub type CreatePhysicalSourceRequest =
     Request<CreatePhysicalSource, Result<physical_source::Model>>;
 pub type CreateSinkRequest = Request<CreateSink, Result<sink::Model>>;
-pub type CreateQueryRequest = Request<CreateQuery, Result<Query>>;
+pub type CreateQueryRequest = Request<CreateQuery, Result<query::Model>>;
 pub type CreateWorkerRequest = Request<CreateWorker, Result<worker::Model>>;
-
-pub type StopQueryRequest = Request<StopQuery, Result<Query>>;
 
 pub type DropLogicalSourceRequest =
     Request<DropLogicalSource, Result<Option<logical_source::Model>>>;
 pub type DropPhysicalSourceRequest =
     Request<DropPhysicalSource, Result<Vec<physical_source::Model>>>;
 pub type DropSinkRequest = Request<DropSink, Result<Vec<sink::Model>>>;
-pub type DropQueryRequest = Request<DropQuery, Result<Query>>;
+pub type DropQueryRequest = Request<DropQuery, Result<Vec<query::Model>>>;
 pub type DropWorkerRequest = Request<DropWorker, Result<worker::Model>>;
 
 pub type GetLogicalSourceRequest = Request<GetLogicalSource, Result<Option<logical_source::Model>>>;
 pub type GetPhysicalSourceRequest = Request<GetPhysicalSource, Result<Vec<physical_source::Model>>>;
 pub type GetSinkRequest = Request<GetSink, Result<Vec<sink::Model>>>;
-pub type GetQueryRequest = Request<GetQuery, Result<Vec<Query>>>;
+pub type GetQueryRequest = Request<GetQuery, Result<Vec<query::Model>>>;
 pub type GetWorkerRequest = Request<GetWorker, Result<Vec<worker::Model>>>;
 
 #[derive(Debug)]
@@ -49,7 +46,6 @@ pub enum CoordinatorRequest {
     CreateSink(CreateSinkRequest),
     CreateQuery(CreateQueryRequest),
     CreateWorker(CreateWorkerRequest),
-    StopQuery(StopQueryRequest),
     DropLogicalSource(DropLogicalSourceRequest),
     DropPhysicalSource(DropPhysicalSourceRequest),
     DropSink(DropSinkRequest),
@@ -88,7 +84,6 @@ into_request!(
 into_request!(DropSink, DropSinkRequest, CoordinatorRequest);
 into_request!(DropQuery, DropQueryRequest, CoordinatorRequest);
 into_request!(DropWorker, DropWorkerRequest, CoordinatorRequest);
-into_request!(StopQuery, StopQueryRequest, CoordinatorRequest);
 into_request!(
     GetLogicalSource,
     GetLogicalSourceRequest,
@@ -106,9 +101,12 @@ into_request!(GetWorker, GetWorkerRequest, CoordinatorRequest);
 const DEFAULT_CAPACITY: usize = 16;
 
 #[cfg(not(madsim))]
-pub fn start(state_backend: StateBackend, batch_size: Option<usize>) -> CoordinatorHandle {
+pub fn start(
+    state_backend: StateBackend,
+    batch_size: Option<usize>,
+) -> flume::Sender<CoordinatorRequest> {
     info!("Starting");
-    let (handle, receiver) = message_bus(batch_size.unwrap_or(DEFAULT_CAPACITY));
+    let (handle, receiver) = flume::bounded(batch_size.unwrap_or(DEFAULT_CAPACITY));
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -118,10 +116,10 @@ pub fn start(state_backend: StateBackend, batch_size: Option<usize>) -> Coordina
             .expect("Failed to create Tokio Runtime");
 
         rt.block_on(async move {
-            let state = catalog::database::State::with(state_backend)
+            let state = catalog::database::Database::with(state_backend)
                 .await
                 .expect("Failed to create database state");
-            let (catalog, state_receivers) = Catalog::from(state);
+            let catalog = Catalog::from(state);
 
             let mut cluster_service = ClusterService::new(catalog.worker.clone());
             let worker_registry = cluster_service.registry_handle();
@@ -139,7 +137,7 @@ pub fn start(state_backend: StateBackend, batch_size: Option<usize>) -> Coordina
                     .await
             });
 
-            RequestListener::new(receiver, catalog, state_receivers)
+            RequestHandler::new(receiver, catalog.clone())
                 .run()
                 .instrument(info_span!("request_listener"))
                 .await
@@ -151,11 +149,11 @@ pub fn start(state_backend: StateBackend, batch_size: Option<usize>) -> Coordina
     handle
 }
 
-pub async fn start_test() -> CoordinatorHandle {
+pub async fn start_test() -> flume::Sender<CoordinatorRequest> {
     info!("Starting");
-    let (handle, receiver) = message_bus(DEFAULT_CAPACITY);
+    let (handle, receiver) = flume::bounded(DEFAULT_CAPACITY);
 
-    let (catalog, state_receivers) = Catalog::for_test().await;
+    let catalog = Catalog::for_test().await;
 
     let mut cluster_service = ClusterService::new(catalog.worker.clone());
     let worker_registry = cluster_service.registry_handle();
@@ -174,7 +172,7 @@ pub async fn start_test() -> CoordinatorHandle {
     });
 
     tokio::spawn(async move {
-        RequestListener::new(receiver, catalog, state_receivers)
+        RequestHandler::new(receiver, catalog)
             .run()
             .instrument(info_span!("request_listener"))
             .await
