@@ -161,6 +161,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Sink::Name).string().not_null().primary_key())
                     .col(ColumnDef::new(Sink::HostAddr).string().not_null())
                     .col(ColumnDef::new(Sink::SinkType).string().not_null())
+                    .col(ColumnDef::new(Sink::Schema).json().not_null())
                     .col(ColumnDef::new(Sink::Config).json().not_null())
                     .foreign_key(
                         ForeignKey::create()
@@ -366,6 +367,7 @@ enum Sink {
     Name,
     HostAddr,
     SinkType,
+    Schema,
     Config,
 }
 

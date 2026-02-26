@@ -1,13 +1,81 @@
-use crate::cluster::poly_join_set::JoinSet;
 use crate::cluster::worker_client::{Rpc, WorkerClientErr};
+use model::query::fragment::FragmentError;
 use model::worker::endpoint::GrpcAddr;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
-use tokio::sync::oneshot;
+
+#[derive(Error, Debug)]
+pub(crate) enum WorkerError {
+    #[error("Worker client '{0}' unavailable")]
+    ClientUnavailable(GrpcAddr),
+
+    #[error("RPC error")]
+    ClientError(#[from] WorkerClientErr),
+}
+
+impl WorkerError {
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::ClientUnavailable(_) => true,
+            Self::ClientError(WorkerClientErr::Connection(..)) => true,
+            Self::ClientError(WorkerClientErr::Communication { status, .. }) => matches!(
+                status.code(),
+                tonic::Code::Unavailable
+                    | tonic::Code::DeadlineExceeded
+                    | tonic::Code::Unknown
+                    | tonic::Code::Aborted
+            ),
+        }
+    }
+}
+
+/// Extract a metadata value as a string, returning an empty string if absent.
+fn meta_str(status: &tonic::Status, key: &str) -> String {
+    status
+        .metadata()
+        .get(key)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
+}
+
+impl From<WorkerError> for FragmentError {
+    fn from(e: WorkerError) -> Self {
+        match e {
+            WorkerError::ClientUnavailable(addr) => FragmentError::WorkerCommunication {
+                msg: format!("Worker '{addr}' unavailable"),
+            },
+            WorkerError::ClientError(WorkerClientErr::Connection(err, addr)) => {
+                FragmentError::WorkerCommunication {
+                    msg: format!("Connection to '{addr}' failed: {err}"),
+                }
+            }
+            WorkerError::ClientError(WorkerClientErr::Communication { addr, status })
+                if matches!(
+                    status.code(),
+                    tonic::Code::Unavailable
+                        | tonic::Code::DeadlineExceeded
+                        | tonic::Code::Cancelled
+                ) =>
+            {
+                FragmentError::WorkerCommunication {
+                    msg: format!("gRPC error at '{addr}': {status}"),
+                }
+            }
+            WorkerError::ClientError(WorkerClientErr::Communication { status, .. }) => {
+                FragmentError::WorkerInternal {
+                    code: meta_str(&status, "code").parse().unwrap_or(0),
+                    msg: status.message().to_string(),
+                    trace: meta_str(&status, "trace"),
+                }
+            }
+        }
+    }
+}
 
 /// Read-only handle for sending RPCs to workers
-pub(crate) struct WorkerRegistryHandle {
+pub struct WorkerRegistryHandle {
     shared: Arc<RwLock<HashMap<GrpcAddr, flume::Sender<Rpc>>>>,
 }
 
@@ -19,22 +87,13 @@ impl Clone for WorkerRegistryHandle {
     }
 }
 
-#[derive(Error, Debug)]
-pub enum WorkerCommunicationError {
-    #[error("Worker client '{0}' unavailable")]
-    ClientUnavailable(GrpcAddr),
-
-    #[error("Internal worker error")]
-    ClientError(#[from] WorkerClientErr),
-}
-
 impl WorkerRegistryHandle {
     pub(crate) async fn send(
         &self,
         addr: &GrpcAddr,
         rpc: Rpc,
-    ) -> Result<(), WorkerCommunicationError> {
-        let sender: Result<flume::Sender<Rpc>, WorkerCommunicationError> = {
+    ) -> Result<(), WorkerError> {
+        let sender: Result<flume::Sender<Rpc>, WorkerError> = {
             let workers = self
                 .shared
                 .read()
@@ -43,46 +102,16 @@ impl WorkerRegistryHandle {
             workers
                 .get(addr)
                 .cloned()
-                .ok_or_else(|| WorkerCommunicationError::ClientUnavailable(addr.clone()))
+                .ok_or_else(|| WorkerError::ClientUnavailable(addr.clone()))
         };
 
         sender?
             .send_async(rpc)
             .await
             // Client with addr has been removed
-            .map_err(|_| WorkerCommunicationError::ClientUnavailable(addr.clone()))
+            .map_err(|_| WorkerError::ClientUnavailable(addr.clone()))
     }
 
-    pub(crate) async fn broadcast<I, Rsp>(
-        &self,
-        requests: I,
-    ) -> Vec<Result<Rsp, WorkerCommunicationError>>
-    where
-        I: IntoIterator<
-            Item = (
-                GrpcAddr,
-                Rpc,
-                oneshot::Receiver<Result<Rsp, WorkerClientErr>>,
-            ),
-        >,
-        Rsp: Send + 'static,
-    {
-        // Spawn a set of tasks for the RPCs
-        let mut join_set: JoinSet<Result<Rsp, WorkerCommunicationError>> = JoinSet::new();
-        for (addr, rpc, rx) in requests {
-            let registry = self.clone();
-            join_set.spawn(async move {
-                // Try to send a single RPC to a client via the registry
-                registry.send(&addr, rpc).await?;
-                // Await the result of the RPC
-                let rpc_reply = rx
-                    .await
-                    .map_err(|_| WorkerCommunicationError::ClientUnavailable(addr))??;
-                Ok(rpc_reply)
-            });
-        }
-        join_set.join_all().await
-    }
 }
 
 /// Writer interface for the worker registry

@@ -1,3 +1,4 @@
+use crate::source::schema::Schema;
 use crate::worker::endpoint::HostAddr;
 #[cfg(feature = "testing")]
 use proptest_derive::Arbitrary;
@@ -15,6 +16,8 @@ pub struct Model {
     pub name: SinkName,
     pub host_addr: HostAddr,
     pub sink_type: SinkType,
+    #[sea_orm(column_type = "JsonBinary")]
+    pub schema: Schema,
     #[sea_orm(column_type = "Json")]
     pub config: Json,
 }
@@ -44,6 +47,7 @@ pub struct CreateSink {
     pub name: SinkName,
     pub host_addr: HostAddr,
     pub sink_type: SinkType,
+    pub schema: Schema,
     pub config: serde_json::Value,
 }
 
@@ -53,6 +57,7 @@ impl From<CreateSink> for ActiveModel {
             name: Set(req.name),
             host_addr: Set(req.host_addr),
             sink_type: Set(req.sink_type),
+            schema: Set(req.schema),
             config: Set(req.config),
         }
     }
@@ -138,8 +143,7 @@ impl crate::IntoCondition for DropSink {
 )]
 #[sea_orm(
     rs_type = "String",
-    db_type = "Enum",
-    enum_name = "sink_type",
+    db_type = "Text",
     rename_all = "PascalCase"
 )]
 pub enum SinkType {

@@ -11,8 +11,7 @@ use strum::{Display, EnumIter};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Display, EnumIter, DeriveActiveEnum)]
 #[sea_orm(
     rs_type = "String",
-    db_type = "Enum",
-    enum_name = "worker_state",
+    db_type = "Text",
     rename_all = "PascalCase"
 )]
 pub enum WorkerState {
@@ -26,8 +25,7 @@ pub enum WorkerState {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Display, EnumIter, DeriveActiveEnum)]
 #[sea_orm(
     rs_type = "String",
-    db_type = "Enum",
-    enum_name = "desired_worker_state",
+    db_type = "Text",
     rename_all = "PascalCase"
 )]
 pub enum DesiredWorkerState {
@@ -118,9 +116,6 @@ pub struct CreateWorker {
     pub grpc_addr: GrpcAddr,
     pub capacity: i32,
     pub peers: Vec<HostAddr>,
-    /// Block the request until the worker reaches this state.
-    /// Defaults to `WorkerState::default()` (Pending), meaning no blocking.
-    pub block_until: WorkerState,
 }
 
 impl CreateWorker {
@@ -130,27 +125,12 @@ impl CreateWorker {
             grpc_addr,
             capacity,
             peers: Vec::new(),
-            block_until: WorkerState::default(),
         }
     }
 
     pub fn with_peers(mut self, peers: Vec<HostAddr>) -> Self {
         self.peers = peers;
         self
-    }
-
-    pub fn block_until(mut self, state: WorkerState) -> Self {
-        assert!(
-            state != WorkerState::Removed && state != WorkerState::Unreachable,
-            "Invalid target state: {:?}",
-            state
-        );
-        self.block_until = state;
-        self
-    }
-
-    pub fn should_block(&self) -> bool {
-        self.block_until != WorkerState::Pending
     }
 }
 
@@ -206,23 +186,10 @@ impl crate::IntoCondition for GetWorker {
 #[derive(Debug, Clone)]
 pub struct DropWorker {
     pub host_addr: HostAddr,
-    pub should_block: bool,
 }
 
 impl DropWorker {
     pub fn new(host_addr: HostAddr) -> Self {
-        Self {
-            host_addr,
-            should_block: false,
-        }
-    }
-
-    pub fn blocking(mut self) -> Self {
-        self.should_block = true;
-        self
-    }
-
-    pub fn should_block(&self) -> bool {
-        self.should_block
+        Self { host_addr }
     }
 }

@@ -109,11 +109,13 @@ prop_compose! {
         name in proptest::string::string_regex("[a-z][a-z0-9_]{2,29}").unwrap(),
         worker in arb_create_worker(),
         sink_type in any::<SinkType>(),
+        schema in arb_schema(),
     ) -> SinkWithRefs {
         let sink = CreateSink {
             name,
             host_addr: worker.host_addr.clone(),
             sink_type,
+            schema,
             config: json!({}),
         };
         SinkWithRefs { worker, sink }
@@ -238,7 +240,13 @@ prop_compose! {
     pub fn arb_create_query()(
         name in proptest::string::string_regex("[a-z][a-z0-9_-]{2,29}").unwrap(),
         statement in proptest::string::string_regex("SELECT [a-z]+ FROM [a-z]+").unwrap(),
-        block_until in any::<QueryState>(),
+        block_until in prop_oneof![
+            Just(QueryState::Pending),
+            Just(QueryState::Planned),
+            Just(QueryState::Registered),
+            Just(QueryState::Running),
+            Just(QueryState::Completed),
+        ],
     ) -> CreateQuery {
         CreateQuery::new(statement).name(name).block_until(block_until)
     }
@@ -249,10 +257,50 @@ prop_compose! {
         stop_mode in any::<StopMode>(),
         should_block in any::<bool>(),
     ) -> DropQuery {
-        DropQuery::new()
-            .stop_mode(stop_mode)
-            .should_block(should_block)
-            .with_filters(GetQuery::new().with_id(query_id))
+        DropQuery {
+            should_block,
+            ..DropQuery::new()
+                .stop_mode(stop_mode)
+                .with_filters(GetQuery::new().with_id(query_id))
+        }
+    }
+}
+
+pub fn arb_create_fragments(
+    query: &crate::query::Model,
+    workers: &[crate::worker::Model],
+) -> Vec<CreateFragment> {
+    use crate::worker::WorkerState;
+
+    let fragments: Vec<_> = workers
+        .iter()
+        .filter(|w| w.current_state == WorkerState::Active && w.capacity > 0)
+        .map(|w| CreateFragment {
+            query_id: query.id,
+            host_addr: w.host_addr.clone(),
+            grpc_addr: w.grpc_addr.clone(),
+            plan: serde_json::json!({}),
+            used_capacity: 1,
+            has_source: false,
+        })
+        .collect();
+
+    if fragments.is_empty() {
+        workers
+            .first()
+            .map(|w| {
+                vec![CreateFragment {
+                    query_id: query.id,
+                    host_addr: w.host_addr.clone(),
+                    grpc_addr: w.grpc_addr.clone(),
+                    plan: serde_json::json!({}),
+                    used_capacity: 0,
+                    has_source: false,
+                }]
+            })
+            .unwrap_or_default()
+    } else {
+        fragments
     }
 }
 

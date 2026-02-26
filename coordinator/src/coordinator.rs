@@ -130,8 +130,9 @@ pub fn start(
                     .await
             });
 
+            let query_catalog = catalog.clone();
             tokio::spawn(async move {
-                QueryService::new(catalog.query.clone(), worker_registry)
+                QueryService::new(query_catalog, worker_registry)
                     .run()
                     .instrument(info_span!("query_service"))
                     .await
@@ -149,7 +150,8 @@ pub fn start(
     handle
 }
 
-pub async fn start_test() -> flume::Sender<CoordinatorRequest> {
+#[cfg(any(test, feature = "testing", madsim))]
+pub async fn start_for_test() -> flume::Sender<CoordinatorRequest> {
     info!("Starting");
     let (handle, receiver) = flume::bounded(DEFAULT_CAPACITY);
 
@@ -164,8 +166,9 @@ pub async fn start_test() -> flume::Sender<CoordinatorRequest> {
             .await
     });
 
+    let query_catalog = catalog.clone();
     tokio::spawn(async move {
-        QueryService::new(catalog.query.clone(), worker_registry)
+        QueryService::new(query_catalog, worker_registry)
             .run()
             .instrument(info_span!("query_service"))
             .await
@@ -174,7 +177,7 @@ pub async fn start_test() -> flume::Sender<CoordinatorRequest> {
     tokio::spawn(async move {
         RequestHandler::new(receiver, catalog)
             .run()
-            .instrument(info_span!("request_listener"))
+            .instrument(info_span!("request_handler"))
             .await
     });
 

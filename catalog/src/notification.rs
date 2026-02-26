@@ -7,6 +7,12 @@ pub struct NotificationChannel {
     state_rx: watch::Receiver<()>,
 }
 
+impl Default for NotificationChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NotificationChannel {
     pub fn new() -> Self {
         let (intent_tx, intent_rx) = watch::channel(());
@@ -40,7 +46,10 @@ impl NotificationChannel {
     }
 }
 
-pub trait NotifiableCatalog {
+#[allow(async_fn_in_trait)]
+pub trait Reconcilable {
+    type Model;
     fn subscribe_intent(&self) -> watch::Receiver<()>;
     fn subscribe_state(&self) -> watch::Receiver<()>;
+    async fn get_mismatch(&self) -> anyhow::Result<Vec<Self::Model>>;
 }

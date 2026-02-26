@@ -1,6 +1,6 @@
 use crate::database::Database;
-use crate::notification::{NotifiableCatalog, NotificationChannel};
-use anyhow::Result;
+use crate::notification::{NotificationChannel, Reconcilable};
+use anyhow::{Result, ensure};
 use model::IntoCondition;
 use model::worker::endpoint::HostAddr;
 use model::worker::network_link;
@@ -14,35 +14,43 @@ use std::sync::Arc;
 
 pub struct WorkerCatalog {
     db: Database,
-    notifications: NotificationChannel,
+    listeners: NotificationChannel,
 }
 
 impl WorkerCatalog {
-    pub fn new(db: Database) -> Arc<Self> {
+    pub fn from(db: Database) -> Arc<Self> {
         Arc::new(Self {
             db,
-            notifications: NotificationChannel::new(),
+            listeners: NotificationChannel::new(),
         })
     }
 
     pub async fn create_worker(&self, req: CreateWorker) -> Result<worker::Model> {
+        ensure!(
+            !req.peers.contains(&req.host_addr),
+            "Worker cannot reference itself as a peer: {}",
+            req.host_addr
+        );
+
         let txn = self.db.conn.begin().await?;
 
         let host_addr = req.host_addr.clone();
         let peers = req.peers.clone();
         let worker_model = worker::ActiveModel::from(req).insert(&txn).await?;
 
-        network_link::Entity::insert_many(peers.into_iter().map(|peer| {
-            network_link::ActiveModel {
-                source_host_addr: Set(host_addr.clone()),
-                target_host_addr: Set(peer),
-            }
-        }))
-        .exec(&txn)
-        .await?;
+        if !peers.is_empty() {
+            network_link::Entity::insert_many(peers.into_iter().map(|peer| {
+                network_link::ActiveModel {
+                    source_host_addr: Set(host_addr.clone()),
+                    target_host_addr: Set(peer),
+                }
+            }))
+            .exec(&txn)
+            .await?;
+        }
 
         txn.commit().await?;
-        self.notifications.notify_intent();
+        self.listeners.notify_intent();
         Ok(worker_model)
     }
 
@@ -60,21 +68,20 @@ impl WorkerCatalog {
             ..Default::default()
         };
         let updated = model.update(&self.db.conn).await?;
-        self.notifications.notify_intent();
+        self.listeners.notify_intent();
         Ok(updated)
     }
 
     pub async fn delete_worker(&self, host_addr: &HostAddr) -> Result<Option<worker::Model>> {
-        Ok(WorkerEntity::delete_by_id(host_addr.clone())
-            .exec_with_returning(&self.db.conn)
-            .await?)
-    }
-
-    pub async fn get_mismatch(&self) -> Result<Vec<worker::Model>> {
-        Ok(WorkerEntity::find()
-            .filter(Expr::cust("current_state <> desired_state"))
-            .all(&self.db.conn)
-            .await?)
+        let model = WorkerEntity::find_by_id(host_addr.clone())
+            .one(&self.db.conn)
+            .await?;
+        if model.is_some() {
+            WorkerEntity::delete_by_id(host_addr.clone())
+                .exec(&self.db.conn)
+                .await?;
+        }
+        Ok(model)
     }
 
     pub async fn update_worker_state(
@@ -84,18 +91,27 @@ impl WorkerCatalog {
     ) -> Result<worker::Model> {
         worker.current_state = Set(new_state);
         let updated = worker.update(&self.db.conn).await?;
-        self.notifications.notify_state();
+        self.listeners.notify_state();
         Ok(updated)
     }
 }
 
-impl NotifiableCatalog for WorkerCatalog {
+impl Reconcilable for WorkerCatalog {
+    type Model = worker::Model;
+
     fn subscribe_intent(&self) -> tokio::sync::watch::Receiver<()> {
-        self.notifications.subscribe_intent()
+        self.listeners.subscribe_intent()
     }
 
     fn subscribe_state(&self) -> tokio::sync::watch::Receiver<()> {
-        self.notifications.subscribe_state()
+        self.listeners.subscribe_state()
+    }
+
+    async fn get_mismatch(&self) -> Result<Vec<worker::Model>> {
+        Ok(WorkerEntity::find()
+            .filter(Expr::cust("current_state <> desired_state"))
+            .all(&self.db.conn)
+            .await?)
     }
 }
 
@@ -103,109 +119,231 @@ impl NotifiableCatalog for WorkerCatalog {
 mod tests {
     use super::*;
     use crate::Catalog;
-    use crate::sink_catalog::SinkCatalog;
-    use crate::source_catalog::SourceCatalog;
-    use crate::test_utils::{test_grpc_addr, test_host_addr, test_prop};
+    use crate::test_utils::test_prop;
+    use model::query::CreateQuery;
+    use model::query::fragment::CreateFragment;
     use model::testing::{
         PhysicalSourceWithRefs, SinkWithRefs, arb_create_worker, arb_physical_with_refs,
         arb_sink_with_refs, arb_unique_workers,
     };
     use proptest::prelude::*;
 
-    fn test_worker_catalog(db: Database) -> Arc<WorkerCatalog> {
-        WorkerCatalog::new(db)
-    }
-
-    #[tokio::test]
-    async fn test_create_and_get_worker() {
-        let db = Database::for_test().await;
-        let catalog = test_worker_catalog(db);
-
-        let req = CreateWorker::new(test_host_addr(), test_grpc_addr(), 10);
+    async fn prop_create_and_get_worker(req: CreateWorker) {
+        let catalog = Catalog::for_test().await;
 
         let created = catalog
-            .create_worker(req)
+            .worker
+            .create_worker(req.clone())
             .await
             .expect("Worker creation should succeed");
 
-        assert_eq!(created.host_addr, test_host_addr());
-        assert_eq!(created.grpc_addr, test_grpc_addr());
-        assert_eq!(created.capacity, 10);
+        assert_eq!(created.host_addr, req.host_addr);
+        assert_eq!(created.grpc_addr, req.grpc_addr);
+        assert_eq!(created.capacity, req.capacity);
         assert_eq!(created.current_state, WorkerState::Pending);
         assert_eq!(created.desired_state, DesiredWorkerState::Active);
 
-        let get_req = GetWorker::all().with_host_addr(test_host_addr());
         let workers = catalog
-            .get_worker(get_req)
+            .worker
+            .get_worker(GetWorker::all().with_host_addr(req.host_addr.clone()))
             .await
             .expect("Get worker should succeed");
 
         assert_eq!(workers.len(), 1);
-        assert_eq!(workers[0].host_addr, test_host_addr());
+        assert_eq!(workers[0].host_addr, req.host_addr);
     }
 
-    #[tokio::test]
-    async fn test_drop_and_delete_worker() {
-        let db = Database::for_test().await;
-        let catalog = test_worker_catalog(db);
+    async fn prop_drop_and_delete_worker(req: CreateWorker) {
+        let catalog = Catalog::for_test().await;
+        catalog.worker.create_worker(req.clone()).await.unwrap();
 
-        let req = CreateWorker::new(test_host_addr(), test_grpc_addr(), 10);
-        catalog.create_worker(req).await.unwrap();
-
-        let drop_req = DropWorker::new(test_host_addr());
         let updated = catalog
-            .drop_worker(drop_req)
+            .worker
+            .drop_worker(DropWorker::new(req.host_addr.clone()))
             .await
             .expect("Drop should succeed");
         assert_eq!(updated.desired_state, DesiredWorkerState::Removed);
 
-        // Delete actually removes
         let deleted = catalog
-            .delete_worker(&test_host_addr())
+            .worker
+            .delete_worker(&req.host_addr)
             .await
             .expect("Delete should succeed");
         assert!(deleted.is_some());
 
-        // Verify it's gone
-        let get_req = GetWorker::all().with_host_addr(test_host_addr());
-        let workers = catalog.get_worker(get_req).await.unwrap();
+        let workers = catalog
+            .worker
+            .get_worker(GetWorker::all().with_host_addr(req.host_addr))
+            .await
+            .unwrap();
         assert!(workers.is_empty(), "Worker should be deleted");
     }
 
-    #[tokio::test]
-    async fn test_mark_worker_state() {
-        let db = Database::for_test().await;
-        let catalog = test_worker_catalog(db);
+    async fn prop_mark_worker_state(req: CreateWorker) {
+        let catalog = Catalog::for_test().await;
+        let created = catalog.worker.create_worker(req.clone()).await.unwrap();
 
-        let req = CreateWorker::new(test_host_addr(), test_grpc_addr(), 10);
-        let created = catalog.create_worker(req).await.unwrap();
-
-        // Mark as Active
         catalog
+            .worker
             .update_worker_state(created.into(), WorkerState::Active)
             .await
             .expect("Mark should succeed");
 
-        let get_req = GetWorker::all().with_host_addr(test_host_addr());
-        let workers = catalog.get_worker(get_req).await.unwrap();
+        let workers = catalog
+            .worker
+            .get_worker(GetWorker::all().with_host_addr(req.host_addr))
+            .await
+            .unwrap();
         assert_eq!(workers[0].current_state, WorkerState::Active);
     }
 
-    #[tokio::test]
-    async fn test_host_addr_grpc_addr_must_differ() {
-        use model::worker::endpoint::HostAddr;
+    async fn prop_host_addr_grpc_addr_must_differ(req: CreateWorker) {
+        let catalog = Catalog::for_test().await;
+        let same_addr = CreateWorker::new(req.host_addr.clone(), req.host_addr, req.capacity);
 
-        let db = Database::for_test().await;
-        let catalog = test_worker_catalog(db);
-
-        // Same address for both host_addr and grpc_addr should fail
-        let same_addr = HostAddr::new("localhost", 8080);
-        let req = CreateWorker::new(same_addr.clone(), same_addr, 10);
-
-        let result = catalog.create_worker(req).await;
         assert!(
-            result.is_err(),
+            catalog.worker.create_worker(same_addr).await.is_err(),
             "Worker creation should fail when host_addr equals grpc_addr"
+        );
+    }
+
+    async fn prop_grpc_addr_unique(w1: CreateWorker, mut w2: CreateWorker) {
+        if w1.host_addr == w2.host_addr {
+            return;
+        }
+        w2.grpc_addr = w1.grpc_addr.clone();
+        if w2.host_addr == w2.grpc_addr {
+            return;
+        }
+
+        let catalog = Catalog::for_test().await;
+        catalog.worker.create_worker(w1).await.unwrap();
+        assert!(
+            catalog.worker.create_worker(w2).await.is_err(),
+            "Duplicate grpc_addr should be rejected"
+        );
+    }
+
+    async fn prop_grpc_addr_may_equal_other_host_addr(w1: CreateWorker, mut w2: CreateWorker) {
+        if w1.host_addr == w2.host_addr {
+            return;
+        }
+        w2.grpc_addr = w1.host_addr.clone();
+        if w2.host_addr == w2.grpc_addr || w1.grpc_addr == w2.grpc_addr {
+            return;
+        }
+
+        let catalog = Catalog::for_test().await;
+        catalog.worker.create_worker(w1).await.unwrap();
+        catalog
+            .worker
+            .create_worker(w2)
+            .await
+            .expect("grpc_addr matching another worker's host_addr should be allowed");
+    }
+
+    async fn prop_worker_delete_blocked_by_fragments(req: CreateWorker) {
+        let catalog = Catalog::for_test().await;
+        catalog.worker.create_worker(req.clone()).await.unwrap();
+
+        let query = catalog
+            .query
+            .create_query(CreateQuery::new("SELECT x FROM y".to_string()))
+            .await
+            .unwrap();
+        catalog
+            .query
+            .create_fragments(
+                &query,
+                vec![CreateFragment {
+                    query_id: query.id,
+                    host_addr: req.host_addr.clone(),
+                    grpc_addr: req.grpc_addr.clone(),
+                    plan: serde_json::json!({}),
+                    used_capacity: 0,
+                    has_source: false,
+                }],
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            catalog.worker.delete_worker(&req.host_addr).await.is_err(),
+            "Worker with fragments should not be deletable"
+        );
+    }
+
+    async fn prop_worker_self_peer_rejected(req: CreateWorker) {
+        let catalog = Catalog::for_test().await;
+        let worker = req.clone().with_peers(vec![req.host_addr]);
+
+        assert!(
+            catalog.worker.create_worker(worker).await.is_err(),
+            "Worker referencing itself as peer should be rejected"
+        );
+    }
+
+    async fn prop_network_links_cascade_on_source_delete(w1: CreateWorker, w2: CreateWorker) {
+        if w1.host_addr == w2.host_addr || w1.grpc_addr == w2.grpc_addr {
+            return;
+        }
+
+        let catalog = Catalog::for_test().await;
+        catalog.worker.create_worker(w2.clone()).await.unwrap();
+
+        let w1_with_peer = w1.clone().with_peers(vec![w2.host_addr.clone()]);
+        catalog.worker.create_worker(w1_with_peer).await.unwrap();
+
+        catalog
+            .worker
+            .delete_worker(&w1.host_addr)
+            .await
+            .expect("Deleting worker with outgoing links should succeed via CASCADE");
+
+        catalog
+            .worker
+            .delete_worker(&w2.host_addr)
+            .await
+            .expect("Peer should be deletable after source worker cascade");
+    }
+
+    async fn prop_network_links_cascade_on_target_delete(w1: CreateWorker, w2: CreateWorker) {
+        if w1.host_addr == w2.host_addr || w1.grpc_addr == w2.grpc_addr {
+            return;
+        }
+
+        let catalog = Catalog::for_test().await;
+        catalog.worker.create_worker(w2.clone()).await.unwrap();
+
+        let w1_with_peer = w1.clone().with_peers(vec![w2.host_addr.clone()]);
+        catalog.worker.create_worker(w1_with_peer).await.unwrap();
+
+        catalog
+            .worker
+            .delete_worker(&w2.host_addr)
+            .await
+            .expect("Deleting target of a link should succeed via CASCADE");
+
+        catalog
+            .worker
+            .delete_worker(&w1.host_addr)
+            .await
+            .expect("Source worker should be deletable after target cascade");
+    }
+
+    async fn prop_duplicate_peer_rejected(w1: CreateWorker, w2: CreateWorker) {
+        if w1.host_addr == w2.host_addr || w1.grpc_addr == w2.grpc_addr {
+            return;
+        }
+
+        let catalog = Catalog::for_test().await;
+        catalog.worker.create_worker(w2.clone()).await.unwrap();
+
+        let w1_dup_peer =
+            w1.with_peers(vec![w2.host_addr.clone(), w2.host_addr.clone()]);
+        assert!(
+            catalog.worker.create_worker(w1_dup_peer).await.is_err(),
+            "Duplicate peer entries should violate composite PK"
         );
     }
 
@@ -350,6 +488,83 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn create_and_get_worker(req in arb_create_worker()) {
+            test_prop(|| async move {
+                prop_create_and_get_worker(req).await;
+            });
+        }
+
+        #[test]
+        fn drop_and_delete_worker(req in arb_create_worker()) {
+            test_prop(|| async move {
+                prop_drop_and_delete_worker(req).await;
+            });
+        }
+
+        #[test]
+        fn mark_worker_state(req in arb_create_worker()) {
+            test_prop(|| async move {
+                prop_mark_worker_state(req).await;
+            });
+        }
+
+        #[test]
+        fn host_addr_grpc_addr_must_differ(req in arb_create_worker()) {
+            test_prop(|| async move {
+                prop_host_addr_grpc_addr_must_differ(req).await;
+            });
+        }
+
+        #[test]
+        fn grpc_addr_unique((w1, w2) in (arb_create_worker(), arb_create_worker())) {
+            test_prop(|| async move {
+                prop_grpc_addr_unique(w1, w2).await;
+            });
+        }
+
+        #[test]
+        fn grpc_addr_may_equal_other_host_addr((w1, w2) in (arb_create_worker(), arb_create_worker())) {
+            test_prop(|| async move {
+                prop_grpc_addr_may_equal_other_host_addr(w1, w2).await;
+            });
+        }
+
+        #[test]
+        fn worker_delete_blocked_by_fragments(req in arb_create_worker()) {
+            test_prop(|| async move {
+                prop_worker_delete_blocked_by_fragments(req).await;
+            });
+        }
+
+        #[test]
+        fn worker_self_peer_rejected(req in arb_create_worker()) {
+            test_prop(|| async move {
+                prop_worker_self_peer_rejected(req).await;
+            });
+        }
+
+        #[test]
+        fn network_links_cascade_on_source_delete((w1, w2) in (arb_create_worker(), arb_create_worker())) {
+            test_prop(|| async move {
+                prop_network_links_cascade_on_source_delete(w1, w2).await;
+            });
+        }
+
+        #[test]
+        fn network_links_cascade_on_target_delete((w1, w2) in (arb_create_worker(), arb_create_worker())) {
+            test_prop(|| async move {
+                prop_network_links_cascade_on_target_delete(w1, w2).await;
+            });
+        }
+
+        #[test]
+        fn duplicate_peer_rejected((w1, w2) in (arb_create_worker(), arb_create_worker())) {
+            test_prop(|| async move {
+                prop_duplicate_peer_rejected(w1, w2).await;
+            });
+        }
+
         #[test]
         fn worker_host_addr_unique(req in arb_create_worker()) {
             test_prop(|| async move {

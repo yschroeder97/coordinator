@@ -1,58 +1,223 @@
 #![cfg(madsim)]
-use crate::cluster_setup::{Cluster, ClusterConfig};
-use coordinator::catalog::query::{CreateQuery, CreateQueryRequest, GetQuery, GetQueryRequest};
-use coordinator::catalog::worker::{
-    CreateWorker, CreateWorkerRequest, GetWorker, GetWorkerRequest,
-};
-use coordinator::coordinator::CoordinatorRequest;
+use crate::cluster::{Cluster, ClusterConfig};
+use model::query::query_state::QueryState;
+use model::query::{CreateQuery, DropQuery, GetQuery, StopMode};
+use model::worker::{CreateWorker, GetWorker, WorkerState};
+use model::worker::endpoint::NetworkAddr;
 use std::time::Duration;
 
+async fn setup_cluster(num_workers: usize, worker_capacity: i32) -> Cluster {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
 
-#[madsim::test]
-async fn simple() {
-    // tracing_subscriber::fmt().init();
-    // SAFETY: This is set at the start of the test before any concurrent access
-    unsafe { std::env::set_var("DATABASE_URL", "sqlite::memory:") };
-
-    let cluster = Cluster::start(ClusterConfig { num_workers: 4 })
+    let cluster = Cluster::start(ClusterConfig { num_workers })
         .await
         .unwrap();
 
-    let (rx_create_worker, create_worker) = CreateWorkerRequest::new(CreateWorker {
-        host_name: "192.168.2.1".to_string(),
-        grpc_port: 8080,
-        data_port: 9090,
-        capacity: 1,
-        peers: vec![],
-    });
+    for i in 1..=num_workers {
+        let host = NetworkAddr::new(format!("192.168.2.{i}"), 9090);
+        let grpc = NetworkAddr::new(format!("192.168.2.{i}"), 8080);
+        let result: anyhow::Result<model::worker::Model> =
+            cluster.send(CreateWorker::new(host, grpc, worker_capacity)).await;
+        result.unwrap();
+    }
 
-    let (rx_create_query, create_query) = CreateQueryRequest::new(CreateQuery {
-        name: "my_query".into(),
-        stmt: "SELECT * FROM poo".into(),
-    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let workers: anyhow::Result<Vec<model::worker::Model>> =
+            cluster.send(GetWorker::all()).await;
+        let workers = workers.unwrap();
 
-    cluster.request(create_worker.into()).await;
-    let response_worker = rx_create_worker.await.unwrap();
-    // info!("CreateWorkerResponse: {:?}", response_worker);
+        let active_count = workers
+            .iter()
+            .filter(|w| w.current_state == WorkerState::Active)
+            .count();
 
-    cluster.request(create_query.into()).await;
-    let response_query = rx_create_query.await.unwrap();
-    // info!("CreateQueryResponse: {:?}", response_query);
+        if active_count == num_workers {
+            break;
+        }
 
-    for _ in 0..2 {
-        let (rx_get_worker, req_get_worker) =
-            GetWorkerRequest::new(GetWorker::new().with_id("10.0.0.1:8080".into()));
-        cluster
-            .request(CoordinatorRequest::GetWorker(req_get_worker))
-            .await;
-        // info!("GetWorkerResponse: {:?}", rx_get_worker.await.unwrap());
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Timed out waiting for workers to become Active ({active_count}/{num_workers})"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 
-        let (rx_get_query, req_get_query) =
-            GetQueryRequest::new(GetQuery::new().with_id("my_query".into()));
-        cluster
-            .request(CoordinatorRequest::GetQuery(req_get_query))
-            .await;
-        // info!("GetQueryResponse: {:?}", rx_get_query.await.unwrap());
-        tokio::time::sleep(Duration::from_secs(5)).await;
+    cluster
+}
+
+#[madsim::test]
+async fn query_lifecycle() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_test_writer()
+        .try_init();
+    let cluster = setup_cluster(4, 100).await;
+
+    let query: model::query::Model = cluster
+        .send(
+            CreateQuery::new("SELECT 1 FROM test".to_string()).block_until(QueryState::Running),
+        )
+        .await
+        .unwrap();
+
+    // Invariant: query reached Running
+    assert_eq!(query.current_state, QueryState::Running);
+
+    // Invariant: exactly one Running query in the catalog
+    let running: Vec<model::query::Model> = cluster
+        .send(GetQuery::new().with_current_state(QueryState::Running))
+        .await
+        .unwrap();
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0].id, query.id);
+
+    // Invariant: no queries stuck in intermediate states
+    for state in [QueryState::Pending, QueryState::Planned, QueryState::Registered] {
+        let stuck: Vec<model::query::Model> = cluster
+            .send(GetQuery::new().with_current_state(state))
+            .await
+            .unwrap();
+        assert!(
+            stuck.is_empty(),
+            "Expected no queries in {state:?}, found {}",
+            stuck.len()
+        );
+    }
+
+    // Stop the query
+    let dropped: Vec<model::query::Model> = cluster
+        .send(
+            DropQuery::new()
+                .with_filters(GetQuery::new().with_id(query.id))
+                .stop_mode(StopMode::Forceful)
+                .blocking(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(dropped.len(), 1);
+    assert!(dropped[0].current_state.is_terminal());
+
+    // Invariant: no queries remain in any non-terminal state
+    let all: Vec<model::query::Model> = cluster.send(GetQuery::new()).await.unwrap();
+    for q in &all {
+        assert!(
+            q.current_state.is_terminal(),
+            "Query {} in non-terminal state {:?} after drop",
+            q.id,
+            q.current_state
+        );
+    }
+}
+
+#[madsim::test]
+async fn concurrent_queries_all_reach_running() {
+    let cluster = setup_cluster(4, 100).await;
+
+    let num_queries = 5;
+    let mut query_ids = Vec::new();
+
+    for i in 0..num_queries {
+        let query: model::query::Model = cluster
+            .send(CreateQuery::new(format!("SELECT {i} FROM test")))
+            .await
+            .unwrap();
+        assert_eq!(query.current_state, QueryState::Pending);
+        query_ids.push(query.id);
+    }
+
+    // Wait for reconciliation to advance all queries to Running
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        let running: Vec<model::query::Model> = cluster
+            .send(GetQuery::new().with_current_state(QueryState::Running))
+            .await
+            .unwrap();
+
+        if running.len() == num_queries {
+            break;
+        }
+
+        // Invariant: query states only move forward — no query should
+        // be in a state before Pending (there is none) or have regressed
+        let all: Vec<model::query::Model> = cluster.send(GetQuery::new()).await.unwrap();
+        for q in &all {
+            assert!(
+                !q.current_state.is_terminal() || q.current_state == QueryState::Completed,
+                "Query {} unexpectedly in terminal state {:?} before explicit stop",
+                q.id,
+                q.current_state
+            );
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Timed out waiting for all queries to reach Running ({}/{})",
+            running.len(),
+            num_queries
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
+    // Invariant: all submitted queries are Running
+    let running: Vec<model::query::Model> = cluster
+        .send(GetQuery::new().with_current_state(QueryState::Running))
+        .await
+        .unwrap();
+    assert_eq!(running.len(), num_queries);
+    for q in &running {
+        assert!(query_ids.contains(&q.id));
+    }
+
+    // Invariant: no queries stuck in intermediate states
+    for state in [QueryState::Pending, QueryState::Planned, QueryState::Registered] {
+        let stuck: Vec<model::query::Model> = cluster
+            .send(GetQuery::new().with_current_state(state))
+            .await
+            .unwrap();
+        assert!(
+            stuck.is_empty(),
+            "Queries stuck in {state:?}: {}",
+            stuck.len()
+        );
+    }
+
+    // Drop all queries at once
+    let dropped: Vec<model::query::Model> = cluster
+        .send(DropQuery::new().stop_mode(StopMode::Forceful).blocking())
+        .await
+        .unwrap();
+
+    assert_eq!(dropped.len(), num_queries);
+
+    // Invariant: every query reached a terminal state
+    for q in &dropped {
+        assert!(
+            q.current_state.is_terminal(),
+            "Query {} should be terminal, got {:?}",
+            q.id,
+            q.current_state
+        );
+    }
+
+    // Invariant: catalog is clean — no non-terminal queries
+    for state in [
+        QueryState::Pending,
+        QueryState::Planned,
+        QueryState::Registered,
+        QueryState::Running,
+    ] {
+        let remaining: Vec<model::query::Model> = cluster
+            .send(GetQuery::new().with_current_state(state))
+            .await
+            .unwrap();
+        assert!(
+            remaining.is_empty(),
+            "Expected 0 queries in {state:?} after drop, found {}",
+            remaining.len()
+        );
     }
 }

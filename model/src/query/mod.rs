@@ -8,10 +8,12 @@ use proptest_derive::Arbitrary;
 use query_state::{DesiredQueryState, QueryState};
 use sea_orm::ActiveValue::{NotSet, Set};
 use sea_orm::Condition;
+use sea_orm::FromJsonQueryResult;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use strum::Display;
+use thiserror::Error;
 use uuid::Uuid;
 
 pub type QueryName = String;
@@ -47,9 +49,22 @@ impl Related<fragment::Entity> for Entity {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
-pub struct QueryError {
-    fragment_errors: HashMap<FragmentId, FragmentError>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult, Error)]
+pub enum QueryError {
+    #[error("Planning failed: {0}")]
+    Planning(String),
+    #[error("Registration failed: {0:?}")]
+    Registering(HashMap<FragmentId, FragmentError>),
+    #[error("Starting failed: {0:?}")]
+    Starting(HashMap<FragmentId, FragmentError>),
+    #[error("Execution failed: {0:?}")]
+    Running(HashMap<FragmentId, FragmentError>),
+}
+
+impl From<anyhow::Error> for QueryError {
+    fn from(e: anyhow::Error) -> Self {
+        QueryError::Planning(e.to_string())
+    }
 }
 
 #[cfg_attr(feature = "testing", derive(Arbitrary))]
@@ -66,12 +81,7 @@ pub struct QueryError {
     EnumIter,
     DeriveActiveEnum,
 )]
-#[sea_orm(
-    rs_type = "String",
-    db_type = "Enum",
-    enum_name = "stop_mode",
-    rename_all = "PascalCase"
-)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "PascalCase")]
 #[strum(serialize_all = "PascalCase")]
 pub enum StopMode {
     #[default]
@@ -165,15 +175,19 @@ impl DropQuery {
         self
     }
 
-    pub fn should_block(mut self, should_block: bool) -> Self {
-        self.should_block = should_block;
+    pub fn blocking(mut self) -> Self {
+        self.should_block = true;
         self
+    }
+
+    pub fn should_block(&self) -> bool {
+        self.should_block
     }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct GetQuery {
-    pub id: Option<QueryId>,
+    pub ids: Option<Vec<QueryId>>,
     pub name: Option<QueryName>,
     pub current_state: Option<QueryState>,
     pub desired_state: Option<DesiredQueryState>,
@@ -184,8 +198,13 @@ impl GetQuery {
         Self::default()
     }
 
-    pub fn with_id(mut self, id: i64) -> Self {
-        self.id = Some(id);
+    pub fn with_id(mut self, id: QueryId) -> Self {
+        self.ids = Some(vec![id]);
+        self
+    }
+
+    pub fn with_ids(mut self, ids: Vec<QueryId>) -> Self {
+        self.ids = Some(ids);
         self
     }
 
@@ -208,7 +227,7 @@ impl GetQuery {
 impl IntoCondition for GetQuery {
     fn into_condition(self) -> Condition {
         Condition::all()
-            .add_option(self.id.map(|v| Column::Id.eq(v)))
+            .add_option(self.ids.map(|ids| Column::Id.is_in(ids)))
             .add_option(self.name.map(|v| Column::Name.eq(v)))
             .add_option(self.current_state.map(|v| Column::CurrentState.eq(v)))
             .add_option(self.desired_state.map(|v| Column::DesiredState.eq(v)))

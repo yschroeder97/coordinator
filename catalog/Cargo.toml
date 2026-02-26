@@ -9,6 +9,12 @@ migration.workspace = true
 tokio.workspace = true
 sea-orm.workspace = true
 anyhow.workspace = true
+tokio-retry.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+
+[features]
+testing = []
 
 [dev-dependencies]
 model = { workspace = true, features = ["testing"] }

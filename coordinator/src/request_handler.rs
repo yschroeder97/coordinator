@@ -1,39 +1,28 @@
-use crate::coordinator::{
-    CoordinatorRequest, CreateQueryRequest, CreateWorkerRequest, DropQueryRequest,
-    DropWorkerRequest,
-};
-use anyhow::Result;
+use crate::coordinator::{CoordinatorRequest, CreateQueryRequest, DropQueryRequest};
 use catalog::Catalog;
-use catalog::NotifiableCatalog;
+use catalog::Reconcilable;
 use controller::request::Request;
 use model::query;
-use model::query::QueryId;
 use model::query::query_state::QueryState;
-use model::worker::endpoint::HostAddr;
+use model::query::{GetQuery, QueryId};
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 use tracing::{debug, info, instrument};
 
 macro_rules! dispatch {
-    ($req:expr, $field:ident . $method:ident) => {{
+    ($self:ident, $req:expr, $field:ident . $method:ident) => {{
         debug!("Received: {:?}", $req);
         let Request { payload, reply_to } = $req;
-        let _ = reply_to.send(
-            self.catalog
-                .$field
-                .$method(payload)
-                .await
-                .map_err(Into::into),
-        );
+        let _ = reply_to.send($self.catalog.$field.$method(payload).await);
     }};
 }
 
 macro_rules! dispatch_blocking {
-    ($req:expr, $field:ident . $method:ident, |$result:ident, $request:ident| $store:expr) => {{
+    ($self:ident, $req:expr, $field:ident . $method:ident, |$result:ident, $request:ident| $store:expr) => {{
         debug!("Received: {:?}", $req);
         let Request { payload, reply_to } = $req;
-        match self.catalog.$field.$method(payload.clone()).await {
+        match $self.catalog.$field.$method(payload.clone()).await {
             Ok($result) => {
                 if payload.should_block() {
                     let $request = Request { payload, reply_to };
@@ -43,7 +32,7 @@ macro_rules! dispatch_blocking {
                 }
             }
             Err(e) => {
-                let _ = reply_to.send(Err(e.into()));
+                let _ = reply_to.send(Err(e));
             }
         }
     }};
@@ -62,17 +51,11 @@ struct PendingQueryDrop {
     request: DropQueryRequest,
 }
 
-enum PendingWorkerRequest {
-    Create(CreateWorkerRequest),
-    Drop(DropWorkerRequest),
-}
-
 pub(super) struct RequestHandler {
     receiver: flume::Receiver<CoordinatorRequest>,
     catalog: Arc<Catalog>,
     pending_query_creates: HashMap<QueryId, CreateQueryRequest>,
     pending_query_drops: Vec<PendingQueryDrop>,
-    pending_worker_requests: HashMap<HostAddr, PendingWorkerRequest>,
 }
 
 impl RequestHandler {
@@ -85,20 +68,18 @@ impl RequestHandler {
             catalog,
             pending_query_creates: HashMap::new(),
             pending_query_drops: Vec::new(),
-            pending_worker_requests: HashMap::new(),
         }
     }
 
     #[instrument(skip(self))]
     pub(super) async fn run(mut self) {
         let mut query_state_rx = self.catalog.query.subscribe_state();
-        let mut worker_state_rx = self.catalog.worker.subscribe_state();
 
         loop {
             tokio::select! {
                 recv_result = self.receiver.recv_async() => match recv_result {
-                    Some(req) => self.handle_recv(req).await,
-                    None => {
+                    Ok(req) => self.handle_recv(req).await,
+                    Err(_) => {
                         info!("All clients have been dropped");
                         return;
                     }
@@ -106,9 +87,6 @@ impl RequestHandler {
                 Ok(()) = query_state_rx.changed() => {
                     self.resolve_pending_queries().await;
                 },
-                Ok(()) = worker_state_rx.changed() => {
-                    self.resolve_pending_workers().await;
-                }
             }
         }
     }
@@ -120,13 +98,24 @@ impl RequestHandler {
             return;
         }
 
-        let all_ids = self.pending_query_creates.keys().chain(
-            self.pending_query_drops
-                .iter()
-                .flat_map(|drop| &drop.query_ids),
-        );
+        let all_ids: Vec<_> = self
+            .pending_query_creates
+            .keys()
+            .copied()
+            .chain(
+                self.pending_query_drops
+                    .iter()
+                    .flat_map(|drop| &drop.query_ids)
+                    .copied(),
+            )
+            .collect();
 
-        let Ok(queries) = self.catalog.query.get_queries_by_id(all_ids).await else {
+        let Ok(queries) = self
+            .catalog
+            .query
+            .get_query(GetQuery::new().with_ids(all_ids))
+            .await
+        else {
             return;
         };
         let queries: HashMap<QueryId, query::Model> =
@@ -191,84 +180,58 @@ impl RequestHandler {
     }
 
     #[instrument(skip(self))]
-    async fn resolve_pending_workers(&mut self) {
-        // TODO: implement worker state resolution
-    }
-
-    #[instrument(skip(self))]
     async fn handle_recv(&mut self, req: CoordinatorRequest) {
         match req {
             CoordinatorRequest::CreateLogicalSource(r) => {
-                dispatch!(r, source.create_logical_source)
+                dispatch!(self, r, source.create_logical_source)
             }
             CoordinatorRequest::CreatePhysicalSource(r) => {
-                dispatch!(r, source.create_physical_source)
+                dispatch!(self, r, source.create_physical_source)
             }
             CoordinatorRequest::CreateSink(r) => {
-                dispatch!(r, sink.create_sink)
-            }
-            CoordinatorRequest::DropLogicalSource(r) => {
-                dispatch!(r, source.drop_logical_source)
-            }
-            CoordinatorRequest::DropPhysicalSource(r) => {
-                dispatch!(r, source.drop_physical_source)
-            }
-            CoordinatorRequest::DropSink(r) => {
-                dispatch!(r, sink.drop_sink)
-            }
-            CoordinatorRequest::GetLogicalSource(r) => {
-                dispatch!(r, source.get_logical_source)
-            }
-            CoordinatorRequest::GetPhysicalSource(r) => {
-                dispatch!(r, source.get_physical_source)
-            }
-            CoordinatorRequest::GetSink(r) => {
-                dispatch!(r, sink.get_sink)
-            }
-            CoordinatorRequest::GetQuery(r) => {
-                dispatch!(r, query.get_query)
-            }
-            CoordinatorRequest::GetWorker(r) => {
-                dispatch!(r, worker.get_worker)
-            }
-            CoordinatorRequest::CreateQuery(r) => {
-                dispatch_blocking!(r, query.create_query, |result, request| {
-                    let prev = self.pending_query_creates.insert(result.id, request);
-                    assert!(prev.is_none(), "Query id {} should be unique", result.id);
-                })
+                dispatch!(self, r, sink.create_sink)
             }
             CoordinatorRequest::CreateWorker(r) => {
-                dispatch_blocking!(r, worker.create_worker, |result, request| {
-                    let prev = self.pending_worker_requests.insert(
-                        result.host_addr.clone(),
-                        PendingWorkerRequest::Create(request),
-                    );
-                    assert!(
-                        prev.is_none(),
-                        "Worker {:?} should be unique",
-                        result.host_addr
-                    );
+                dispatch!(self, r, worker.create_worker)
+            }
+            CoordinatorRequest::DropLogicalSource(r) => {
+                dispatch!(self, r, source.drop_logical_source)
+            }
+            CoordinatorRequest::DropPhysicalSource(r) => {
+                dispatch!(self, r, source.drop_physical_source)
+            }
+            CoordinatorRequest::DropSink(r) => {
+                dispatch!(self, r, sink.drop_sink)
+            }
+            CoordinatorRequest::DropWorker(r) => {
+                dispatch!(self, r, worker.drop_worker)
+            }
+            CoordinatorRequest::GetLogicalSource(r) => {
+                dispatch!(self, r, source.get_logical_source)
+            }
+            CoordinatorRequest::GetPhysicalSource(r) => {
+                dispatch!(self, r, source.get_physical_source)
+            }
+            CoordinatorRequest::GetSink(r) => {
+                dispatch!(self, r, sink.get_sink)
+            }
+            CoordinatorRequest::GetQuery(r) => {
+                dispatch!(self, r, query.get_query)
+            }
+            CoordinatorRequest::GetWorker(r) => {
+                dispatch!(self, r, worker.get_worker)
+            }
+            CoordinatorRequest::CreateQuery(r) => {
+                dispatch_blocking!(self, r, query.create_query, |result, request| {
+                    self.pending_query_creates.insert(result.id, request);
                 })
             }
             CoordinatorRequest::DropQuery(r) => {
-                dispatch_blocking!(r, query.drop_query, |result, request| {
+                dispatch_blocking!(self, r, query.drop_query, |result, request| {
                     self.pending_query_drops.push(PendingQueryDrop {
                         query_ids: result.iter().map(|q| q.id).collect(),
                         request,
                     });
-                })
-            }
-            CoordinatorRequest::DropWorker(r) => {
-                dispatch_blocking!(r, worker.drop_worker, |result, request| {
-                    let prev = self.pending_worker_requests.insert(
-                        result.host_addr.clone(),
-                        PendingWorkerRequest::Drop(request),
-                    );
-                    assert!(
-                        prev.is_none(),
-                        "Worker {:?} should be unique",
-                        result.host_addr
-                    );
                 })
             }
         }
@@ -278,9 +241,8 @@ impl RequestHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use catalog::database::Database;
     use model::query::query_state::DesiredQueryState;
-    use model::query::{CreateQuery, GetQuery};
+    use model::query::{CreateQuery, DropQuery, GetQuery, StopMode};
 
     struct TestHandle {
         sender: flume::Sender<CoordinatorRequest>,
@@ -292,9 +254,7 @@ mod tests {
             let catalog = Catalog::for_test().await;
             let (sender, receiver) = flume::bounded(16);
             let handler_catalog = catalog.clone();
-            tokio::spawn(async move {
-                RequestHandler::new(receiver, handler_catalog).run().await;
-            });
+            tokio::spawn(RequestHandler::new(receiver, handler_catalog).run());
             Self { sender, catalog }
         }
 
@@ -331,6 +291,7 @@ mod tests {
 
         let req = CreateQuery::new("SELECT 1".to_string()).block_until(QueryState::Registered);
         let mut rx = handle.send(req).await;
+        tokio::task::yield_now().await;
 
         let queries = handle
             .catalog
@@ -344,7 +305,7 @@ mod tests {
         let query = handle
             .catalog
             .query
-            .advance_query_state(query)
+            .set_query_state(&query, |_| QueryState::Planned)
             .await
             .unwrap();
         assert_eq!(query.current_state, QueryState::Planned);
@@ -353,7 +314,7 @@ mod tests {
         let query = handle
             .catalog
             .query
-            .advance_query_state(query)
+            .set_query_state(&query, |_| QueryState::Registered)
             .await
             .unwrap();
         assert_eq!(query.current_state, QueryState::Registered);
@@ -368,6 +329,7 @@ mod tests {
 
         let req = CreateQuery::new("SELECT 1".to_string()).block_until(QueryState::Running);
         let rx = handle.send(req).await;
+        tokio::task::yield_now().await;
 
         let queries = handle
             .catalog
@@ -380,11 +342,154 @@ mod tests {
         handle
             .catalog
             .query
-            .set_query_state(query, |_| QueryState::Failed)
+            .set_query_state(&query, |_| QueryState::Failed)
             .await
             .unwrap();
 
         let result = rx.await.unwrap();
         assert!(result.is_err(), "Should fail with EarlyTermination");
+    }
+
+    #[tokio::test]
+    async fn blocking_create_then_blocking_drop() {
+        let handle = TestHandle::new().await;
+
+        let create = CreateQuery::new("SELECT 1".to_string()).block_until(QueryState::Running);
+        let create_rx = handle.send(create).await;
+        tokio::task::yield_now().await;
+
+        let queries = handle
+            .catalog
+            .query
+            .get_query(GetQuery::new())
+            .await
+            .unwrap();
+        let query = queries.into_iter().next().unwrap();
+        let query_id = query.id;
+
+        let query = handle
+            .catalog
+            .query
+            .set_query_state(&query, |_| QueryState::Planned)
+            .await
+            .unwrap();
+        let query = handle
+            .catalog
+            .query
+            .set_query_state(&query, |_| QueryState::Registered)
+            .await
+            .unwrap();
+        let query = handle
+            .catalog
+            .query
+            .set_query_state(&query, |_| QueryState::Running)
+            .await
+            .unwrap();
+        assert_eq!(query.current_state, QueryState::Running);
+
+        let created = create_rx.await.unwrap().unwrap();
+        assert_eq!(created.current_state, QueryState::Running);
+
+        let drop = DropQuery::new()
+            .with_filters(GetQuery::new().with_id(query_id))
+            .stop_mode(StopMode::Forceful)
+            .blocking();
+        let drop_rx = handle.send(drop).await;
+        tokio::task::yield_now().await;
+
+        let query = handle
+            .catalog
+            .query
+            .get_query(GetQuery::new().with_id(query_id))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(query.desired_state, DesiredQueryState::Stopped);
+
+        handle
+            .catalog
+            .query
+            .set_query_state(&query, |_| QueryState::Stopped)
+            .await
+            .unwrap();
+
+        let dropped = drop_rx.await.unwrap().unwrap();
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].current_state, QueryState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn blocking_drop_multiple_queries() {
+        let handle = TestHandle::new().await;
+
+        let mut query_ids = Vec::new();
+        for i in 0..3 {
+            let create = CreateQuery::new(format!("SELECT {i}"));
+            let rx = handle.send(create).await;
+            let result = rx.await.unwrap().unwrap();
+            query_ids.push(result.id);
+        }
+
+        for &id in &query_ids {
+            let query = handle
+                .catalog
+                .query
+                .get_query(GetQuery::new().with_id(id))
+                .await
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            let query = handle
+                .catalog
+                .query
+                .set_query_state(&query, |_| QueryState::Planned)
+                .await
+                .unwrap();
+            let query = handle
+                .catalog
+                .query
+                .set_query_state(&query, |_| QueryState::Registered)
+                .await
+                .unwrap();
+            let _ = handle
+                .catalog
+                .query
+                .set_query_state(&query, |_| QueryState::Running)
+                .await
+                .unwrap();
+        }
+
+        let drop = DropQuery::new().stop_mode(StopMode::Graceful).blocking();
+        let drop_rx = handle.send(drop).await;
+        tokio::task::yield_now().await;
+
+        for &id in &query_ids {
+            let query = handle
+                .catalog
+                .query
+                .get_query(GetQuery::new().with_id(id))
+                .await
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            assert_eq!(query.desired_state, DesiredQueryState::Stopped);
+            handle
+                .catalog
+                .query
+                .set_query_state(&query, |_| QueryState::Stopped)
+                .await
+                .unwrap();
+        }
+
+        let dropped = drop_rx.await.unwrap().unwrap();
+        assert_eq!(dropped.len(), 3);
+        for model in &dropped {
+            assert_eq!(model.current_state, QueryState::Stopped);
+            assert!(query_ids.contains(&model.id));
+        }
     }
 }

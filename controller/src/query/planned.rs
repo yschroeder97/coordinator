@@ -1,6 +1,7 @@
-use crate::query::reconciler::{QueryContext, State, Transition};
+use crate::query::reconciler::{QueryContext, Transition};
 use crate::query::registered::Registered;
-use model::query::{fragment};
+use model::query::fragment::{self, FragmentState};
+use model::query::StopMode;
 use tracing::info;
 
 pub struct Planned {
@@ -8,19 +9,22 @@ pub struct Planned {
 }
 
 impl Transition for Planned {
-    async fn transition(self, ctx: QueryContext) -> State {
-        info!("Registering fragments");
+    type Next = Registered;
+    type Error = anyhow::Error;
 
+    async fn advance(&mut self, ctx: &mut QueryContext) -> Result<Registered, Self::Error> {
+        info!("Registering fragments");
         let results = ctx.register_fragments(&self.fragments).await;
 
-        let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
-        if !errors.is_empty() {
-            return Err(RegistrationError::Rpc(errors));
-        }
-
-        State::Registered(Registered {
-            registered_query:,
-            fragments: self.fragments,
+        ctx.apply_rpc_results(&self.fragments, results, FragmentState::Registered)
+            .await?;
+        
+        Ok(Registered {
+            fragments: std::mem::take(&mut self.fragments),
         })
+    }
+
+    async fn cleanup(self, ctx: &mut QueryContext, _mode: StopMode) {
+        ctx.cleanup_unregister(&self.fragments).await;
     }
 }

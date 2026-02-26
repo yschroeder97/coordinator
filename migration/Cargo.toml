@@ -15,8 +15,8 @@ model.workspace = true
 strum.workspace = true
 
 [dependencies.sea-orm-migration]
-version = "2.0.0-rc"
+version = "=1.1.1"
 features = [
     "sqlx-sqlite",
-    "runtime-tokio",
+    "runtime-tokio-native-tls",
 ]

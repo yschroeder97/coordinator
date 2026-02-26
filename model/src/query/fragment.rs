@@ -2,7 +2,7 @@ use crate::query::QueryName;
 use crate::query::query_state::QueryState;
 use crate::worker::endpoint::{GrpcAddr, HostAddr};
 use sea_orm::entity::prelude::*;
-use sea_orm::{NotSet, Set};
+use sea_orm::{FromJsonQueryResult, NotSet, Set};
 use serde::{Deserialize, Serialize};
 use strum::Display;
 use thiserror::Error;
@@ -11,17 +11,14 @@ pub type FragmentId = i64;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
 pub enum FragmentError {
-    #[error(
-        "Internal worker error; code: {code}, msg: {msg}, stacktrace: {trace}, location: {location}"
-    )]
-    InternalWorkerError {
+    #[error("Internal worker error; code: {code}, msg: {msg}, stacktrace: {trace}")]
+    WorkerInternal {
         code: u64,
         msg: String,
         trace: String,
-        location: String,
     },
     #[error("Worker communication error: {msg}")]
-    WorkerCommunicationError { msg: String },
+    WorkerCommunication { msg: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, DeriveEntityModel)]
@@ -104,6 +101,15 @@ impl From<CreateFragment> for ActiveModel {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct FragmentUpdate {
+    pub id: FragmentId,
+    pub state: FragmentState,
+    pub start_timestamp: Option<chrono::DateTime<chrono::Local>>,
+    pub stop_timestamp: Option<chrono::DateTime<chrono::Local>>,
+    pub error: Option<FragmentError>,
+}
+
 #[derive(
     Clone,
     Copy,
@@ -117,12 +123,7 @@ impl From<CreateFragment> for ActiveModel {
     EnumIter,
     DeriveActiveEnum,
 )]
-#[sea_orm(
-    rs_type = "String",
-    db_type = "Enum",
-    enum_name = "fragment_state",
-    rename_all = "PascalCase"
-)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "PascalCase")]
 #[strum(serialize_all = "PascalCase")]
 pub enum FragmentState {
     #[default]

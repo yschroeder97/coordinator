@@ -4,6 +4,7 @@ mod reconciler;
 mod registered;
 mod running;
 pub mod service;
-mod terminated;
 
 pub type QueryId = i64;
+
+pub struct Completed;

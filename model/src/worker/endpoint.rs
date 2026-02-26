@@ -62,7 +62,7 @@ impl NetworkAddr {
 
 impl From<NetworkAddr> for sea_orm::Value {
     fn from(val: NetworkAddr) -> Self {
-        Value::String(Some(val.to_string()))
+        Value::String(Some(Box::new(val.to_string())))
     }
 }
 

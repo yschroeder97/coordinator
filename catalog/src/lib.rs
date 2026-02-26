@@ -8,7 +8,7 @@ pub mod worker_catalog;
 #[cfg(test)]
 pub mod test_utils;
 
-pub use notification::NotifiableCatalog;
+pub use notification::Reconcilable;
 
 use database::Database;
 use query_catalog::QueryCatalog;
@@ -34,12 +34,12 @@ impl Catalog {
         Arc::new(Self {
             source: SourceCatalog::from(db.clone()),
             sink: SinkCatalog::from(db.clone()),
-            worker: WorkerCatalog::new(db.clone()),
-            query: QueryCatalog::new(db),
+            worker: WorkerCatalog::from(db.clone()),
+            query: QueryCatalog::from(db),
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub async fn for_test() -> Arc<Self> {
         Self::from(Database::for_test().await)
     }

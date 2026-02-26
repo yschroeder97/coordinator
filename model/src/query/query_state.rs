@@ -24,8 +24,7 @@ use strum::{Display, EnumString, IntoEnumIterator};
 )]
 #[sea_orm(
     rs_type = "String",
-    db_type = "Enum",
-    enum_name = "query_state",
+    db_type = "Text",
     rename_all = "PascalCase"
 )]
 #[strum(serialize_all = "PascalCase")]
@@ -57,8 +56,7 @@ pub enum QueryState {
 )]
 #[sea_orm(
     rs_type = "String",
-    db_type = "Enum",
-    enum_name = "desired_query_state",
+    db_type = "Text",
     rename_all = "PascalCase"
 )]
 #[strum(serialize_all = "PascalCase")]
@@ -85,8 +83,7 @@ pub enum DesiredQueryState {
 )]
 #[sea_orm(
     rs_type = "String",
-    db_type = "Enum",
-    enum_name = "termination_state",
+    db_type = "Text",
     rename_all = "PascalCase"
 )]
 #[strum(serialize_all = "PascalCase")]
@@ -109,16 +106,6 @@ impl QueryState {
             self,
             QueryState::Completed | QueryState::Stopped | QueryState::Failed
         )
-    }
-
-    pub fn next(&self) -> Self {
-        match self {
-            QueryState::Pending => QueryState::Planned,
-            QueryState::Planned => QueryState::Registered,
-            QueryState::Registered => QueryState::Running,
-            QueryState::Running => QueryState::Completed,
-            _ => unreachable!("Terminal state reached"),
-        }
     }
 
     pub fn transitions(&self) -> Vec<QueryState> {

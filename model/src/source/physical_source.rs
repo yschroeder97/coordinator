@@ -126,10 +126,7 @@ impl crate::IntoCondition for GetPhysicalSource {
 
 #[derive(Clone, Debug, Default)]
 pub struct DropPhysicalSource {
-    pub id: Option<PhysicalSourceId>,
-    pub host_addr: Option<HostAddr>,
-    pub logical_source: Option<LogicalSourceName>,
-    pub source_type: Option<SourceType>,
+    pub filters: GetPhysicalSource,
 }
 
 impl DropPhysicalSource {
@@ -137,34 +134,15 @@ impl DropPhysicalSource {
         Self::default()
     }
 
-    pub fn with_id(mut self, id: PhysicalSourceId) -> Self {
-        self.id = Some(id);
-        self
-    }
-
-    pub fn with_host_addr(mut self, host_addr: HostAddr) -> Self {
-        self.host_addr = Some(host_addr);
-        self
-    }
-
-    pub fn with_logical_source(mut self, logical_source: LogicalSourceName) -> Self {
-        self.logical_source = Some(logical_source);
-        self
-    }
-
-    pub fn with_source_type(mut self, source_type: SourceType) -> Self {
-        self.source_type = Some(source_type);
+    pub fn with_filters(mut self, filters: GetPhysicalSource) -> Self {
+        self.filters = filters;
         self
     }
 }
 
 impl crate::IntoCondition for DropPhysicalSource {
     fn into_condition(self) -> Condition {
-        Condition::all()
-            .add_option(self.id.map(|v| Column::Id.eq(v)))
-            .add_option(self.host_addr.map(|v| Column::HostAddr.eq(v)))
-            .add_option(self.logical_source.map(|v| Column::LogicalSource.eq(v)))
-            .add_option(self.source_type.map(|v| Column::SourceType.eq(v)))
+        self.filters.into_condition()
     }
 }
 
@@ -172,7 +150,7 @@ impl crate::IntoCondition for DropPhysicalSource {
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Display, EnumIter, DeriveActiveEnum, Serialize, Deserialize,
 )]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "source_type", rename_all = "PascalCase")]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "PascalCase")]
 pub enum SourceType {
     File,
     Tcp,

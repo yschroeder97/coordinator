@@ -27,10 +27,15 @@ impl SinkCatalog {
     }
 
     pub async fn drop_sink(&self, req: DropSink) -> Result<Vec<sink::Model>> {
-        Ok(SinkEntity::delete_many()
+        let models = SinkEntity::find()
+            .filter(req.clone().into_condition())
+            .all(&self.db.conn)
+            .await?;
+        SinkEntity::delete_many()
             .filter(req.into_condition())
-            .exec_with_returning(&self.db.conn)
-            .await?)
+            .exec(&self.db.conn)
+            .await?;
+        Ok(models)
     }
 }
 
@@ -38,77 +43,59 @@ impl SinkCatalog {
 mod tests {
     use super::*;
     use crate::Catalog;
-    use crate::test_utils::{test_grpc_addr, test_host_addr, test_prop};
-    use model::sink::SinkType;
+    use crate::test_utils::test_prop;
     use model::testing::{SinkWithRefs, arb_sink_with_refs};
-    use model::worker::CreateWorker;
     use proptest::proptest;
-    use sea_orm::sea_query::prelude::serde_json;
 
-    #[tokio::test]
-    async fn test_create_and_get_sink() {
+    async fn prop_create_and_get_sink(req: SinkWithRefs) {
         let catalog = Catalog::for_test().await;
 
-        let worker_req = CreateWorker::new(test_host_addr(), test_grpc_addr(), 10);
         catalog
             .worker
-            .create_worker(worker_req)
+            .create_worker(req.worker)
             .await
             .expect("Worker creation should succeed");
 
-        let sink_req = CreateSink {
-            name: "test_sink".to_string(),
-            host_addr: test_host_addr(),
-            sink_type: SinkType::Print,
-            config: serde_json::json!({}),
-        };
         let created = catalog
             .sink
-            .create_sink(sink_req)
+            .create_sink(req.sink.clone())
             .await
             .expect("Sink creation should succeed");
 
-        assert_eq!(created.name, "test_sink");
-        assert_eq!(created.sink_type, SinkType::Print);
+        assert_eq!(created.name, req.sink.name);
+        assert_eq!(created.sink_type, req.sink.sink_type);
 
-        let get_req = GetSink::new().by_name("test_sink".to_string());
         let sinks = catalog
             .sink
-            .get_sink(get_req)
+            .get_sink(GetSink::new().by_name(req.sink.name.clone()))
             .await
             .expect("Get sink should succeed");
 
         assert_eq!(sinks.len(), 1);
-        assert_eq!(sinks[0].name, "test_sink");
+        assert_eq!(sinks[0].name, req.sink.name);
+        assert_eq!(sinks[0].sink_type, req.sink.sink_type);
     }
 
-    #[tokio::test]
-    async fn test_drop_sink() {
+    async fn prop_drop_sink(req: SinkWithRefs) {
         let catalog = Catalog::for_test().await;
 
-        let worker_req = CreateWorker::new(test_host_addr(), test_grpc_addr(), 10);
-        catalog.worker.create_worker(worker_req).await.unwrap();
+        catalog.worker.create_worker(req.worker).await.unwrap();
+        catalog.sink.create_sink(req.sink.clone()).await.unwrap();
 
-        let sink_req = CreateSink {
-            name: "sink_to_drop".to_string(),
-            host_addr: test_host_addr(),
-            sink_type: SinkType::File,
-            config: serde_json::json!({}),
-        };
-        catalog.sink.create_sink(sink_req).await.unwrap();
-
-        let drop_req = DropSink::new().with_name("sink_to_drop".to_string());
         let dropped = catalog
             .sink
-            .drop_sink(drop_req)
+            .drop_sink(DropSink::new().with_name(req.sink.name.clone()))
             .await
             .expect("Drop should succeed");
 
         assert_eq!(dropped.len(), 1);
-        assert_eq!(dropped[0].name, "sink_to_drop");
+        assert_eq!(dropped[0].name, req.sink.name);
 
-        let get_req = GetSink::new().by_name("sink_to_drop".to_string());
-        let sinks = catalog.sink.get_sink(get_req).await.unwrap();
+        let sinks = catalog
+            .sink
+            .get_sink(GetSink::new().by_name(req.sink.name.clone()))
+            .await
+            .unwrap();
         assert!(sinks.is_empty(), "Sink should be deleted");
     }
 
@@ -187,6 +174,20 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn create_and_get_sink(req in arb_sink_with_refs()) {
+            test_prop(|| async move {
+                prop_create_and_get_sink(req).await;
+            });
+        }
+
+        #[test]
+        fn drop_sink(req in arb_sink_with_refs()) {
+            test_prop(|| async move {
+                prop_drop_sink(req).await;
+            });
+        }
+
         #[test]
         fn sink_name_unique(req in arb_sink_with_refs()) {
             test_prop(|| async move {

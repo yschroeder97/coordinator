@@ -1,4 +1,3 @@
--- Query state validation trigger
 CREATE TRIGGER IF NOT EXISTS validate_query_state_transition
     BEFORE UPDATE OF current_state
     ON query
@@ -22,7 +21,6 @@ BEGIN
     END;
 END;
 
--- Reserve worker capacity when a fragment is created
 CREATE TRIGGER IF NOT EXISTS reserve_worker_capacity
     AFTER INSERT ON fragment
 BEGIN
@@ -31,16 +29,56 @@ BEGIN
     WHERE host_addr = NEW.host_addr;
 END;
 
--- Release all fragment capacity back to workers when query reaches terminal state
-CREATE TRIGGER IF NOT EXISTS release_worker_capacity
-    AFTER UPDATE OF current_state ON query
+CREATE TRIGGER IF NOT EXISTS release_fragment_capacity
+    AFTER UPDATE OF current_state ON fragment
     WHEN NEW.current_state IN ('Completed', 'Stopped', 'Failed')
+    AND OLD.current_state NOT IN ('Completed', 'Stopped', 'Failed')
 BEGIN
     UPDATE worker
-    SET capacity = capacity + (
-        SELECT COALESCE(SUM(f.used_capacity), 0)
-        FROM fragment f
-        WHERE f.query_id = NEW.id AND f.host_addr = worker.host_addr
+    SET capacity = capacity + NEW.used_capacity
+    WHERE host_addr = NEW.host_addr;
+END;
+
+CREATE TRIGGER IF NOT EXISTS derive_query_state_on_fragment_update
+    AFTER UPDATE OF current_state ON fragment
+BEGIN
+    UPDATE query
+    SET current_state = COALESCE(
+        (SELECT CASE
+            WHEN EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state = 'Failed')
+                THEN 'Failed'
+            WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state != 'Completed')
+                THEN 'Completed'
+            WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state != 'Stopped')
+                THEN 'Stopped'
+            WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state NOT IN ('Running', 'Started'))
+                THEN 'Running'
+            WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state != 'Registered')
+                THEN 'Registered'
+            ELSE NULL
+        END),
+        (SELECT current_state FROM query WHERE id = NEW.query_id)
     )
-    WHERE host_addr IN (SELECT host_addr FROM fragment WHERE query_id = NEW.id);
+    WHERE id = NEW.query_id;
+
+    UPDATE query SET
+        start_timestamp = CASE
+            WHEN (SELECT current_state FROM query WHERE id = NEW.query_id)
+                 IN ('Running', 'Completed', 'Stopped', 'Failed')
+            THEN COALESCE(
+                (SELECT MAX(start_timestamp) FROM fragment WHERE query_id = NEW.query_id),
+                (SELECT start_timestamp FROM query WHERE id = NEW.query_id)
+            )
+            ELSE (SELECT start_timestamp FROM query WHERE id = NEW.query_id)
+        END,
+        stop_timestamp = CASE
+            WHEN (SELECT current_state FROM query WHERE id = NEW.query_id)
+                 IN ('Completed', 'Stopped', 'Failed')
+            THEN COALESCE(
+                (SELECT MAX(stop_timestamp) FROM fragment WHERE query_id = NEW.query_id),
+                (SELECT stop_timestamp FROM query WHERE id = NEW.query_id)
+            )
+            ELSE (SELECT stop_timestamp FROM query WHERE id = NEW.query_id)
+        END
+    WHERE id = NEW.query_id;
 END;

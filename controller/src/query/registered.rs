@@ -1,88 +1,31 @@
-use crate::cluster::worker_registry::{WorkerCommunicationError, WorkerRegistryHandle};
-use crate::query::reconciler::{Query, Transition};
+use crate::query::reconciler::{QueryContext, Transition};
 use crate::query::running::Running;
-use catalog::query_catalog::QueryCatalog;
-use model::query::query_state::QueryState;
-use model::query::{active_query, fragment, StopMode};
-use std::sync::Arc;
-use thiserror::Error;
+use model::query::StopMode;
+use model::query::fragment::{self, FragmentState};
 use tracing::info;
 
 pub struct Registered {
-    pub registered_query: active_query::Model,
     pub fragments: Vec<fragment::Model>,
 }
 
-impl Query<Registered> {
-    pub async fn resume(
-        query: ActiveQuery,
-        query_catalog: Arc<QueryCatalog>,
-        worker_registry: WorkerRegistryHandle,
-    ) -> Query<Registered> {
-        let fragments = query_catalog
-            .get_fragments(&GetFragment::new().of_query(query.id.clone()))
-            .await
-            .unwrap();
+impl Transition for Registered {
+    type Next = Running;
+    type Error = anyhow::Error;
 
-        Query {
-            id: query.id,
-            query_catalog,
-            worker_registry,
-            state: Registered { fragments },
-        }
-    }
-}
+    async fn advance(&mut self, ctx: &mut QueryContext) -> Result<Running, Self::Error> {
+        info!("Starting fragments");
+        let results = ctx.start_fragments(&self.fragments).await;
 
-#[derive(Error, Debug)]
-pub enum StartingError {
-    #[error("RPC error during fragment start")]
-    Rpc(Vec<WorkerCommunicationError>),
-}
-
-impl Transition<Running, StartingError> for Query<Registered> {
-    async fn try_transition(&mut self) -> Result<Running, StartingError> {
-        info!("Starting fragments for query {}", self.id);
-
-        let results = self.start_fragments(&self.state.fragments).await;
-
-        let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
-        if !errors.is_empty() {
-            return Err(StartingError::Rpc(errors));
-        }
+        ctx.apply_rpc_results(&self.fragments, results, FragmentState::Started)
+            .await?;
 
         Ok(Running {
-            fragments: std::mem::take(&mut self.state.fragments),
+            fragments: std::mem::take(&mut self.fragments),
         })
     }
 
-    async fn on_transition_ok(self, running: Running) -> Query<Running> {
-        self.query_catalog
-            .move_to_next_state(&MarkQuery::new(self.id.clone(), QueryState::Running))
-            .await
-            .unwrap();
-
-        self.transition_to(running)
-    }
-
-    async fn on_transition_stopped(self, stop_mode: StopMode) {
-        info!("Stopping: stopping and unregistering fragments");
-        let _ = self.stop_fragments(stop_mode, &self.state.fragments).await;
-        let _ = self.unregister_fragments(&self.state.fragments).await;
-        let _ = self
-            .query_catalog
-            .move_to_next_state(&MarkQuery::stopped(self.id, stop_mode))
-            .await;
-    }
-
-    async fn on_transition_failed(self, _error: StartingError) {
-        let _ = self
-            .stop_fragments(StopMode::Forceful, &self.state.fragments)
-            .await;
-        let _ = self.unregister_fragments(&self.state.fragments).await;
-        // TODO: Convert StartingError to QueryError for better error tracking
-        let _ = self
-            .query_catalog
-            .move_to_next_state(&MarkQuery::failed(self.id, None))
-            .await;
+    async fn cleanup(self, ctx: &mut QueryContext, mode: StopMode) {
+        ctx.cleanup_stop(mode, &self.fragments).await;
+        ctx.cleanup_unregister(&self.fragments).await;
     }
 }

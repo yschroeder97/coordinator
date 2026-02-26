@@ -3,18 +3,26 @@ name = "coordinator"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+testing = ["catalog/testing"]
+
 [dependencies]
 catalog.workspace = true
 model.workspace = true
 controller.workspace = true
 madsim.workspace = true
 tonic.workspace = true
+prost.workspace = true
 flume.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 
+[build-dependencies]
+tonic-build.workspace = true
+
 [dev-dependencies]
+catalog = { workspace = true, features = ["testing"] }
 model = { workspace = true, features = ["testing"] }
-proptest = "1.5"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

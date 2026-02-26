@@ -42,9 +42,15 @@ impl SourceCatalog {
         &self,
         req: DropLogicalSource,
     ) -> Result<Option<logical_source::Model>> {
-        Ok(LogicalSourceEntity::delete_by_id(req.with_name)
-            .exec_with_returning(&self.db.conn)
-            .await?)
+        let model = LogicalSourceEntity::find_by_id(req.with_name.clone())
+            .one(&self.db.conn)
+            .await?;
+        if model.is_some() {
+            LogicalSourceEntity::delete_by_id(req.with_name)
+                .exec(&self.db.conn)
+                .await?;
+        }
+        Ok(model)
     }
 
     pub async fn create_physical_source(
@@ -70,10 +76,15 @@ impl SourceCatalog {
         &self,
         req: DropPhysicalSource,
     ) -> Result<Vec<physical_source::Model>> {
-        Ok(PhysicalSourceEntity::delete_many()
+        let models = PhysicalSourceEntity::find()
+            .filter(req.clone().into_condition())
+            .all(&self.db.conn)
+            .await?;
+        PhysicalSourceEntity::delete_many()
             .filter(req.into_condition())
-            .exec_with_returning(&self.db.conn)
-            .await?)
+            .exec(&self.db.conn)
+            .await?;
+        Ok(models)
     }
 }
 
@@ -81,90 +92,85 @@ impl SourceCatalog {
 mod tests {
     use super::*;
     use crate::Catalog;
-    use crate::test_utils::{test_grpc_addr, test_host_addr, test_prop};
-    use model::source::physical_source::SourceType;
-    use model::source::schema::{DataType, Schema};
-    use model::testing::{PhysicalSourceWithRefs, arb_physical_with_refs};
+    use crate::test_utils::test_prop;
+    use model::source::physical_source::DropPhysicalSource;
+    use model::testing::{PhysicalSourceWithRefs, arb_create_worker, arb_physical_with_refs};
+    use model::testing::arb_create_logical_source;
     use model::worker::CreateWorker;
     use proptest::proptest;
 
-    #[tokio::test]
-    async fn test_get_logical_source() {
-        let catalog = SourceCatalog::from(Database::for_test().await);
-
-        let req = CreateLogicalSource {
-            name: "source".to_string(),
-            schema: Schema::from(vec![("a_bool".to_string(), DataType::BOOL)]),
-        };
-
-        let rsp = catalog.create_logical_source(req).await;
-        assert!(rsp.is_ok(), "Logical source creation should succeed");
-        assert_eq!(rsp.unwrap().name, "source");
-
-        let rsp = catalog
-            .get_logical_source(GetLogicalSource {
-                with_name: "source".to_string(),
-            })
-            .await;
-
-        let model = rsp.unwrap();
-        assert!(model.is_some(), "Get request should return a value");
-        assert_eq!(model.unwrap().name, "source");
-    }
-
-    #[tokio::test]
-    async fn test_capacity_constraints() {
+    async fn prop_get_logical_source(create_source: CreateLogicalSource) {
         let catalog = Catalog::for_test().await;
 
-        let worker_req1 = CreateWorker::new(test_host_addr(), test_grpc_addr(), -1);
-        let mut worker_req2 = worker_req1.clone();
-        worker_req2.capacity = 0;
+        let model = catalog
+            .source
+            .create_logical_source(create_source.clone())
+            .await
+            .expect("Logical source creation should succeed");
+
+        assert_eq!(model.name, create_source.name);
+        assert_eq!(model.schema, create_source.schema);
+
+        let fetched = catalog
+            .source
+            .get_logical_source(GetLogicalSource {
+                with_name: create_source.name.clone(),
+            })
+            .await
+            .expect("Get should not fail");
+
+        let fetched = fetched.expect("Get request should return a value");
+        assert_eq!(fetched.name, create_source.name);
+        assert_eq!(fetched.schema, create_source.schema);
+    }
+
+    async fn prop_capacity_constraints(worker: CreateWorker) {
+        let catalog = Catalog::for_test().await;
+
+        let mut negative = worker.clone();
+        negative.capacity = -(worker.capacity.max(1));
 
         assert!(
-            catalog.worker.create_worker(worker_req1).await.is_err(),
+            catalog.worker.create_worker(negative).await.is_err(),
             "Cannot create worker with negative capacity"
         );
         assert!(
-            catalog.worker.create_worker(worker_req2).await.is_ok(),
-            "Worker with capacity of zero is allowed"
+            catalog.worker.create_worker(worker).await.is_ok(),
+            "Worker with non-negative capacity is allowed"
         );
     }
 
-    #[tokio::test]
-    async fn test_get_physical_source() {
+    async fn prop_get_physical_source(req: PhysicalSourceWithRefs) {
         let catalog = Catalog::for_test().await;
 
-        let logical_req = CreateLogicalSource {
-            name: "source".to_string(),
-            schema: Schema::from(vec![("a_bool".to_string(), DataType::BOOL)]),
-        };
-        let worker_req = CreateWorker::new(test_host_addr(), test_grpc_addr(), 10);
-        let physical_source_req = CreatePhysicalSource {
-            logical_source: "source".to_string(),
-            host_addr: test_host_addr(),
-            source_type: SourceType::File,
-            source_config: Default::default(),
-            parser_config: Default::default(),
-        };
-
-        let _ = catalog
+        catalog
             .source
-            .create_logical_source(logical_req)
+            .create_logical_source(req.logical.clone())
+            .await
+            .expect("Logical source creation should succeed");
+        catalog
+            .worker
+            .create_worker(req.worker.clone())
+            .await
+            .expect("Worker creation should succeed");
+        catalog
+            .source
+            .create_physical_source(req.physical.clone())
+            .await
+            .expect("Physical source creation should succeed");
+
+        let rsp = catalog
+            .source
+            .get_physical_source(
+                GetPhysicalSource::new().with_logical_source(req.logical.name.clone()),
+            )
             .await
             .unwrap();
-        let _ = catalog.worker.create_worker(worker_req).await.unwrap();
-        let _ = catalog
-            .source
-            .create_physical_source(physical_source_req)
-            .await
-            .unwrap();
 
-        let get_req = GetPhysicalSource::new().with_logical_source("source".to_string());
-        let rsp = catalog.source.get_physical_source(get_req).await.unwrap();
         assert_eq!(rsp.len(), 1);
-        assert_eq!(rsp[0].logical_source, "source");
-        assert_eq!(rsp[0].host_addr, test_host_addr());
-        assert_eq!(rsp[0].source_type, SourceType::File);
+        assert_eq!(rsp[0].logical_source, req.logical.name);
+        assert_eq!(rsp[0].host_addr, req.worker.host_addr);
+        assert_eq!(rsp[0].source_type, req.physical.source_type);
     }
 
     async fn prop_logical_name_unique(create_source: CreateLogicalSource) {
@@ -262,6 +268,160 @@ mod tests {
         );
     }
 
+    async fn prop_drop_physical_by_id(req: PhysicalSourceWithRefs) {
+        let catalog = Catalog::for_test().await;
+        catalog
+            .source
+            .create_logical_source(req.logical)
+            .await
+            .unwrap();
+        catalog
+            .worker
+            .create_worker(req.worker)
+            .await
+            .unwrap();
+        let created = catalog
+            .source
+            .create_physical_source(req.physical)
+            .await
+            .unwrap();
+
+        let drop_req = DropPhysicalSource::new().with_filters(GetPhysicalSource::new().with_id(created.id));
+        let dropped = catalog
+            .source
+            .drop_physical_source(drop_req)
+            .await
+            .unwrap();
+
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].id, created.id);
+        assert_eq!(dropped[0].logical_source, created.logical_source);
+        assert_eq!(dropped[0].host_addr, created.host_addr);
+
+        let remaining = catalog
+            .source
+            .get_physical_source(GetPhysicalSource::new().with_id(created.id))
+            .await
+            .unwrap();
+        assert!(
+            remaining.is_empty(),
+            "Physical source should be removed after drop"
+        );
+    }
+
+    async fn prop_drop_physical_by_logical_source(req: PhysicalSourceWithRefs) {
+        let catalog = Catalog::for_test().await;
+        catalog
+            .source
+            .create_logical_source(req.logical.clone())
+            .await
+            .unwrap();
+        catalog
+            .worker
+            .create_worker(req.worker)
+            .await
+            .unwrap();
+        catalog
+            .source
+            .create_physical_source(req.physical)
+            .await
+            .unwrap();
+
+        let drop_req = DropPhysicalSource::new()
+            .with_filters(GetPhysicalSource::new().with_logical_source(req.logical.name.clone()));
+        let dropped = catalog
+            .source
+            .drop_physical_source(drop_req)
+            .await
+            .unwrap();
+
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].logical_source, req.logical.name);
+
+        let remaining = catalog
+            .source
+            .get_physical_source(
+                GetPhysicalSource::new().with_logical_source(req.logical.name.clone()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            remaining.is_empty(),
+            "All physical sources for '{}' should be removed",
+            req.logical.name
+        );
+    }
+
+    async fn prop_drop_physical_no_match_noop(req: PhysicalSourceWithRefs) {
+        let catalog = Catalog::for_test().await;
+        catalog
+            .source
+            .create_logical_source(req.logical)
+            .await
+            .unwrap();
+        catalog
+            .worker
+            .create_worker(req.worker.clone())
+            .await
+            .unwrap();
+        catalog
+            .source
+            .create_physical_source(req.physical)
+            .await
+            .unwrap();
+
+        let drop_req = DropPhysicalSource::new().with_filters(GetPhysicalSource::new().with_id(999999));
+        let dropped = catalog
+            .source
+            .drop_physical_source(drop_req)
+            .await
+            .unwrap();
+        assert!(dropped.is_empty());
+
+        let remaining = catalog
+            .source
+            .get_physical_source(GetPhysicalSource::new().with_host_addr(req.worker.host_addr))
+            .await
+            .unwrap();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "Existing physical source should not be affected"
+        );
+    }
+
+    async fn prop_create_drop_create_physical(req: PhysicalSourceWithRefs) {
+        let catalog = Catalog::for_test().await;
+        catalog
+            .source
+            .create_logical_source(req.logical)
+            .await
+            .unwrap();
+        catalog
+            .worker
+            .create_worker(req.worker)
+            .await
+            .unwrap();
+        let first = catalog
+            .source
+            .create_physical_source(req.physical.clone())
+            .await
+            .unwrap();
+
+        let drop_req = DropPhysicalSource::new().with_filters(GetPhysicalSource::new().with_id(first.id));
+        catalog
+            .source
+            .drop_physical_source(drop_req)
+            .await
+            .unwrap();
+
+        catalog
+            .source
+            .create_physical_source(req.physical)
+            .await
+            .expect("Second creation after drop should succeed");
+    }
+
     async fn prop_create_drop_create_logical(create_source: CreateLogicalSource) {
         let catalog = Catalog::for_test().await;
         catalog
@@ -289,6 +449,27 @@ mod tests {
 
     proptest! {
         #[test]
+        fn get_logical_source(create_source in arb_create_logical_source()) {
+            test_prop(|| async move {
+                prop_get_logical_source(create_source).await;
+            });
+        }
+
+        #[test]
+        fn capacity_constraints(worker in arb_create_worker()) {
+            test_prop(|| async move {
+                prop_capacity_constraints(worker).await;
+            });
+        }
+
+        #[test]
+        fn get_physical_source(req in arb_physical_with_refs()) {
+            test_prop(|| async move {
+                prop_get_physical_source(req).await;
+            });
+        }
+
+        #[test]
         fn logical_name_unique(create_source: CreateLogicalSource) {
             test_prop(|| async move {
                 prop_logical_name_unique(create_source).await;
@@ -313,6 +494,34 @@ mod tests {
         fn create_drop_create_logical_succeeds(create_source: CreateLogicalSource) {
             test_prop(|| async move {
                 prop_create_drop_create_logical(create_source).await;
+            })
+        }
+
+        #[test]
+        fn drop_physical_by_id(req in arb_physical_with_refs()) {
+            test_prop(|| async move {
+                prop_drop_physical_by_id(req).await;
+            })
+        }
+
+        #[test]
+        fn drop_physical_by_logical_source(req in arb_physical_with_refs()) {
+            test_prop(|| async move {
+                prop_drop_physical_by_logical_source(req).await;
+            })
+        }
+
+        #[test]
+        fn drop_physical_no_match_noop(req in arb_physical_with_refs()) {
+            test_prop(|| async move {
+                prop_drop_physical_no_match_noop(req).await;
+            })
+        }
+
+        #[test]
+        fn create_drop_create_physical_succeeds(req in arb_physical_with_refs()) {
+            test_prop(|| async move {
+                prop_create_drop_create_physical(req).await;
             })
         }
     }

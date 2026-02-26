@@ -1,25 +1,24 @@
-use crate::cluster::service::WorkerStateInternal::Connecting;
 use crate::cluster::poly_join_set::{AbortHandle, JoinSet};
+use crate::cluster::service::WorkerStateInternal::{Active, Connecting};
 use crate::cluster::worker_client::{Rpc, WorkerClient, WorkerClientErr};
 use crate::cluster::worker_registry::{WorkerRegistry, WorkerRegistryHandle};
-use catalog::NotifiableCatalog;
+use catalog::Reconcilable;
 use catalog::worker_catalog::WorkerCatalog;
 use model::worker::endpoint::GrpcAddr;
-use model::worker::{DesiredWorkerState, WorkerState};
+use model::worker::{self, DesiredWorkerState, WorkerState};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 const CLUSTER_SERVICE_POLLING_DURATION: tokio::time::Duration = tokio::time::Duration::from_secs(5);
 
 enum WorkerStateInternal {
     Connecting {
-        addr: GrpcAddr,
+        model: worker::Model,
         handle: AbortHandle,
     },
     Active {
-        addr: GrpcAddr,
-        client: WorkerClient,
+        model: worker::Model,
     },
 }
 
@@ -50,72 +49,71 @@ impl ClusterService {
         self.reconcile().await;
 
         loop {
-            if let Ok(result) =
-                tokio::time::timeout(CLUSTER_SERVICE_POLLING_DURATION, workers.changed()).await
-            {
-                result.expect("Worker catalog notification channel closed unexpectedly")
+            tokio::select! {
+                result = workers.changed() => {
+                    // Catalogs should outlive this task
+                    result.expect("Worker catalog notification channel closed unexpectedly");
+                }
+                Some(result) = self.connecting.join_next() => {
+                    match result {
+                        Ok(client_or_err) => self.on_progress_connecting(client_or_err).await,
+                        Err(e) if e.is_cancelled() => {}
+                        Err(e) => panic!("Worker connection task panicked: {:?}", e),
+                    }
+                    continue;
+                }
+                _ = tokio::time::sleep(CLUSTER_SERVICE_POLLING_DURATION) => {}
             }
             self.reconcile().await;
         }
     }
 
     async fn reconcile(&mut self) {
-        // 1. Fetch mismatches between the current state and desired state of queries from the catalog.
         let mismatched_workers = match self.worker_catalog.get_mismatch().await {
-            Ok(queries) => queries,
+            Ok(workers) => workers,
             Err(e) => {
-                error!("Failed to fetch workers: {:?}", e);
+                warn!("Failed to fetch workers: {:?}", e);
                 return;
             }
         };
 
-        // 2. Reconcile
         for mismatch in mismatched_workers {
             let addr = mismatch.grpc_addr.clone();
-
-            let should_delete = false;
-            self.workers
-                .entry(addr.clone())
-                .and_modify(|state| {
-                    // Task running for the mismatch
-                    match state {
-                        WorkerStateInternal::Connecting { addr, handle }
-                            if mismatch.desired_state == DesiredWorkerState::Removed =>
-                        {
-                            handle.abort();
-                            debug!("Aborted pending connection for worker {}", addr);
-                        }
-                        WorkerStateInternal::Connecting { .. }
-                            if mismatch.desired_state == DesiredWorkerState::Active => {}
-                        // Dropping the client here will lead to SendErr's in query reconcilers/worker registry
-                        WorkerStateInternal::Active { addr, .. } => {
-                            self.registry.unregister(&addr);
-                            info!("Removed active worker {}", addr);
-                        }
-                        _ => panic!(
-                            "Desired state should be one of (Active, Removed), but was {}",
-                            mismatch.desired_state
-                        ),
-                    }
-                })
-                .or_insert_with(|| {
-                    assert_eq!(
-                        mismatch.desired_state,
-                        DesiredWorkerState::Active,
-                        "When no task associated with {} exists, only creation is valid",
-                        &addr
+            match mismatch.desired_state {
+                // No task running for this worker, spawn & insert
+                DesiredWorkerState::Active if !self.workers.contains_key(&addr) => {
+                    let handle = self.connecting.spawn(WorkerClient::connect(addr.clone()));
+                    self.workers.insert(
+                        addr,
+                        Connecting {
+                            model: mismatch,
+                            handle,
+                        },
                     );
-                    Connecting {
-                        addr: addr.clone(),
-                        handle: self.connecting.spawn(WorkerClient::connect(addr.clone())),
+                }
+                // Task is already running, noop
+                DesiredWorkerState::Active => {}
+                // Worker should be removed, remove from internal state and
+                // either cancel the connection task or just unregister and drop the client task
+                DesiredWorkerState::Removed => {
+                    if let Some(state) = self.workers.remove(&addr) {
+                        match state {
+                            Connecting { handle, .. } => {
+                                handle.abort();
+                                debug!("Aborted pending connection for worker {}", addr);
+                            }
+                            Active { .. } => {
+                                self.registry.unregister(&addr);
+                                info!("Removed active worker {}", addr);
+                            }
+                        }
                     }
-                });
-
-            if should_delete {
-                self.worker_catalog
-                    .delete_worker(&mismatch.host_addr)
-                    .await
-                    .unwrap();
+                    // Actually delete the worker from the catalog
+                    self.worker_catalog
+                        .delete_worker(&mismatch.host_addr)
+                        .await
+                        .expect("No one else should delete a worker");
+                }
             }
         }
     }
@@ -123,45 +121,54 @@ impl ClusterService {
     async fn on_progress_connecting(
         &mut self,
         client_or_err: Result<(flume::Sender<Rpc>, WorkerClient), WorkerClientErr>,
-    ) -> () {
+    ) {
         match client_or_err {
             Ok((sender, client)) => self.on_connect_success(sender, client).await,
             Err(e) => self.on_connect_err(e).await,
         }
     }
 
-    async fn on_connect_success(
-        &mut self,
-        rpc_sender: flume::Sender<Rpc>,
-        client: WorkerClient,
-    ) -> () {
+    async fn on_connect_success(&mut self, rpc_sender: flume::Sender<Rpc>, client: WorkerClient) {
         let addr = client.grpc_addr();
-        // 1. Mark worker as ACTIVE to avoid polling it in the next reconciliation loop
-        self.worker_catalog
-            .update_worker_state(&addr, WorkerState::Active)
+        let model = match self.workers.remove(&addr) {
+            Some(Connecting { model, .. }) => model,
+            _ => {
+                debug!(
+                    "Connection succeeded for {} but worker was already removed",
+                    addr
+                );
+                return;
+            }
+        };
+
+        let updated = self
+            .worker_catalog
+            .update_worker_state(model.into(), WorkerState::Active)
             .await
             .unwrap();
 
-        // 2. Move to active in internal state
-        self.workers.entry(addr.clone()).and_modify(|state| {
-            *state = WorkerStateInternal::Active {
-                addr: addr.clone(),
-                client,
-            }
-        });
-
-        // 3. Register in worker registry to enable query reconcilers to send RPCs using their handles
+        self.workers.insert(addr.clone(), Active { model: updated });
         self.registry.register(addr, rpc_sender);
+        tokio::spawn(client.run());
     }
 
-    async fn on_connect_err(&mut self, err: WorkerClientErr) -> () {
+    async fn on_connect_err(&mut self, err: WorkerClientErr) {
         error!("Failed to connect to worker: {:?}", err);
+        let addr = err.addr().clone();
+        let model = match self.workers.remove(&addr) {
+            Some(Connecting { model, .. }) => model,
+            _ => {
+                debug!(
+                    "Connection failed for {} but worker was already removed",
+                    addr
+                );
+                return;
+            }
+        };
 
         self.worker_catalog
-            .update_worker_state(err.addr(), WorkerState::Unreachable)
+            .update_worker_state(model.into(), WorkerState::Unreachable)
             .await
             .unwrap();
-
-        self.workers.remove(err.addr());
     }
 }
