@@ -14,7 +14,7 @@ tracing.workspace = true
 serde_json.workspace = true
 
 [features]
-testing = []
+testing = ["model/testing"]
 
 [dev-dependencies]
 model = { workspace = true, features = ["testing"] }

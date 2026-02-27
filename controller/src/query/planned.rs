@@ -1,7 +1,7 @@
 use crate::query::reconciler::{QueryContext, Transition};
 use crate::query::registered::Registered;
-use model::query::fragment::{self, FragmentState};
 use model::query::StopMode;
+use model::query::fragment;
 use tracing::info;
 
 pub struct Planned {
@@ -10,21 +10,16 @@ pub struct Planned {
 
 impl Transition for Planned {
     type Next = Registered;
-    type Error = anyhow::Error;
 
-    async fn advance(&mut self, ctx: &mut QueryContext) -> Result<Registered, Self::Error> {
+    async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Registered> {
         info!("Registering fragments");
         let results = ctx.register_fragments(&self.fragments).await;
-
-        ctx.apply_rpc_results(&self.fragments, results, FragmentState::Registered)
-            .await?;
-        
         Ok(Registered {
-            fragments: std::mem::take(&mut self.fragments),
+            fragments: ctx.apply_rpc_results(&self.fragments, results).await?,
         })
     }
 
-    async fn cleanup(self, ctx: &mut QueryContext, _mode: StopMode) {
-        ctx.cleanup_unregister(&self.fragments).await;
+    async fn rollback(self, ctx: &mut QueryContext, _mode: StopMode) {
+        ctx.rollback_unregister(&self.fragments).await;
     }
 }

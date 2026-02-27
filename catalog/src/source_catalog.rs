@@ -92,7 +92,7 @@ impl SourceCatalog {
 mod tests {
     use super::*;
     use crate::Catalog;
-    use crate::test_utils::test_prop;
+    use crate::testing::test_prop;
     use model::source::physical_source::DropPhysicalSource;
     use model::testing::{PhysicalSourceWithRefs, arb_create_worker, arb_physical_with_refs};
     use model::testing::arb_create_logical_source;

@@ -4,7 +4,8 @@ use crate::cluster::worker_client::{
 use crate::cluster::worker_registry::WorkerError;
 use crate::query::Completed;
 use crate::query::reconciler::{QueryContext, Transition};
-use model::query::fragment::{self, FragmentError, FragmentState, FragmentUpdate};
+use model::Set;
+use model::query::fragment::{self, FragmentError, FragmentState};
 use model::query::StopMode;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -46,9 +47,8 @@ impl Running {
 
 impl Transition for Running {
     type Next = Completed;
-    type Error = anyhow::Error;
 
-    async fn advance(&mut self, ctx: &mut QueryContext) -> Result<Completed, Self::Error> {
+    async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Completed> {
         info!("Polling fragment status");
 
         loop {
@@ -58,11 +58,11 @@ impl Transition for Running {
 
             let mut updates = Vec::new();
 
-            for (f, result) in self.fragments.iter().zip(results) {
-                let reply = match result {
+            for (fragment, rpc_result) in self.fragments.iter().zip(results) {
+                let reply = match rpc_result {
                     Ok(reply) => reply,
                     Err(e) => {
-                        warn!("Failed to poll fragment {} status: {e}", f.id);
+                        warn!("Failed to poll fragment {} status: {e}", fragment.id);
                         continue;
                     }
                 };
@@ -87,19 +87,24 @@ impl Transition for Running {
                         .unwrap_or_else(|| FragmentError::WorkerCommunication {
                             msg: "Fragment failed without error details".to_string(),
                         });
-                    warn!(fragment_id = f.id, %err, "Fragment failed");
+                    warn!(fragment_id = fragment.id, %err, "Fragment failed");
                     Some(err)
                 } else {
                     None
                 };
 
-                updates.push(FragmentUpdate {
-                    id: f.id,
-                    state,
-                    start_timestamp,
-                    stop_timestamp,
-                    error,
-                });
+                let mut am: fragment::ActiveModel = fragment.clone().into();
+                am.current_state = Set(state);
+                if let Some(ts) = start_timestamp {
+                    am.start_timestamp = Set(Some(ts));
+                }
+                if let Some(ts) = stop_timestamp {
+                    am.stop_timestamp = Set(Some(ts));
+                }
+                if let Some(err) = error {
+                    am.error = Set(Some(err));
+                }
+                updates.push(am);
             }
 
             match ctx
@@ -108,7 +113,10 @@ impl Transition for Running {
                 .update_fragment_states(ctx.query.id, updates)
                 .await
             {
-                Ok(query) => ctx.query = query,
+                Ok((query, fragments)) => {
+                    ctx.query = query;
+                    self.fragments = fragments;
+                }
                 Err(e) => {
                     warn!("Failed to update fragment states: {e}");
                     continue;
@@ -125,8 +133,8 @@ impl Transition for Running {
         }
     }
 
-    async fn cleanup(self, ctx: &mut QueryContext, mode: StopMode) {
-        ctx.cleanup_stop(mode, &self.fragments).await;
-        ctx.cleanup_unregister(&self.fragments).await;
+    async fn rollback(self, ctx: &mut QueryContext, mode: StopMode) {
+        ctx.rollback_stop(mode, &self.fragments).await;
+        ctx.rollback_unregister(&self.fragments).await;
     }
 }

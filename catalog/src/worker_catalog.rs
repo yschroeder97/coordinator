@@ -119,7 +119,7 @@ impl Reconcilable for WorkerCatalog {
 mod tests {
     use super::*;
     use crate::Catalog;
-    use crate::test_utils::test_prop;
+    use crate::testing::test_prop;
     use model::query::CreateQuery;
     use model::query::fragment::CreateFragment;
     use model::testing::{

@@ -21,7 +21,7 @@ BEGIN
     END;
 END;
 
-CREATE TRIGGER IF NOT EXISTS reserve_worker_capacity
+CREATE TRIGGER IF NOT EXISTS acquire_worker_capacity
     AFTER INSERT ON fragment
 BEGIN
     UPDATE worker
@@ -66,7 +66,7 @@ BEGIN
             WHEN (SELECT current_state FROM query WHERE id = NEW.query_id)
                  IN ('Running', 'Completed', 'Stopped', 'Failed')
             THEN COALESCE(
-                (SELECT MAX(start_timestamp) FROM fragment WHERE query_id = NEW.query_id),
+                (SELECT MIN(start_timestamp) FROM fragment WHERE query_id = NEW.query_id),
                 (SELECT start_timestamp FROM query WHERE id = NEW.query_id)
             )
             ELSE (SELECT start_timestamp FROM query WHERE id = NEW.query_id)
@@ -81,4 +81,19 @@ BEGIN
             ELSE (SELECT stop_timestamp FROM query WHERE id = NEW.query_id)
         END
     WHERE id = NEW.query_id;
+
+    UPDATE query SET
+        error = (
+            SELECT json_group_object(
+                f.host_addr,
+                COALESCE(
+                    json_extract(f.error, '$.WorkerInternal.msg'),
+                    json_extract(f.error, '$.WorkerCommunication.msg')
+                )
+            )
+            FROM fragment f
+            WHERE f.query_id = NEW.query_id AND f.error IS NOT NULL
+        )
+    WHERE id = NEW.query_id
+    AND (SELECT current_state FROM query WHERE id = NEW.query_id) = 'Failed';
 END;

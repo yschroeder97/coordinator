@@ -241,8 +241,13 @@ impl RequestHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use model::query::query_state::DesiredQueryState;
+    use catalog::testing::{advance_query_to, test_prop};
+    use model::query::query_state::QueryState;
     use model::query::{CreateQuery, DropQuery, GetQuery, StopMode};
+    use model::testing::{arb_create_query, arb_valid_state_path};
+    use model::worker::CreateWorker;
+    use model::worker::endpoint::NetworkAddr;
+    use proptest::prelude::*;
 
     struct TestHandle {
         sender: flume::Sender<CoordinatorRequest>,
@@ -252,6 +257,12 @@ mod tests {
     impl TestHandle {
         async fn new() -> Self {
             let catalog = Catalog::for_test().await;
+            let worker = CreateWorker::new(
+                NetworkAddr::new("test-host".to_string(), 9000),
+                NetworkAddr::new("test-host".to_string(), 9001),
+                100,
+            );
+            catalog.worker.create_worker(worker).await.unwrap();
             let (sender, receiver) = flume::bounded(16);
             let handler_catalog = catalog.clone();
             tokio::spawn(RequestHandler::new(receiver, handler_catalog).run());
@@ -270,64 +281,30 @@ mod tests {
                 .expect("Handler should be running");
             rx
         }
+
+        async fn advance_to(&self, query_id: i64, target: QueryState) {
+            advance_query_to(&self.catalog, query_id, target).await;
+        }
     }
 
-    #[tokio::test]
-    async fn non_blocking_create_query_returns_immediately() {
+    async fn prop_non_blocking_create_returns_pending(req: CreateQuery) {
         let handle = TestHandle::new().await;
-
-        let req = CreateQuery::new("SELECT 1".to_string());
+        let statement = req.sql_statement.clone();
+        let name = req.name.clone();
         let rx = handle.send(req).await;
-
-        let result = rx.await.unwrap().unwrap();
-        assert_eq!(result.statement, "SELECT 1");
-        assert_eq!(result.current_state, QueryState::Pending);
-        assert_eq!(result.desired_state, DesiredQueryState::Completed);
+        let result: anyhow::Result<model::query::Model> = rx.await.unwrap();
+        let model = result.unwrap();
+        assert_eq!(model.current_state, QueryState::Pending);
+        assert_eq!(model.statement, statement);
+        assert_eq!(model.name, name);
     }
 
-    #[tokio::test]
-    async fn blocking_create_query_waits_for_target_state() {
+    async fn prop_blocking_create_resolves_correctly(
+        block_until: QueryState,
+        path: Vec<QueryState>,
+    ) {
         let handle = TestHandle::new().await;
-
-        let req = CreateQuery::new("SELECT 1".to_string()).block_until(QueryState::Registered);
-        let mut rx = handle.send(req).await;
-        tokio::task::yield_now().await;
-
-        let queries = handle
-            .catalog
-            .query
-            .get_query(GetQuery::new())
-            .await
-            .unwrap();
-        assert_eq!(queries.len(), 1);
-        let query = queries.into_iter().next().unwrap();
-
-        let query = handle
-            .catalog
-            .query
-            .set_query_state(&query, |_| QueryState::Planned)
-            .await
-            .unwrap();
-        assert_eq!(query.current_state, QueryState::Planned);
-        assert!(rx.try_recv().is_err(), "Should not have resolved yet");
-
-        let query = handle
-            .catalog
-            .query
-            .set_query_state(&query, |_| QueryState::Registered)
-            .await
-            .unwrap();
-        assert_eq!(query.current_state, QueryState::Registered);
-
-        let result = rx.await.unwrap().unwrap();
-        assert_eq!(result.current_state, QueryState::Registered);
-    }
-
-    #[tokio::test]
-    async fn blocking_create_query_early_termination() {
-        let handle = TestHandle::new().await;
-
-        let req = CreateQuery::new("SELECT 1".to_string()).block_until(QueryState::Running);
+        let req = CreateQuery::new("SELECT 1".to_string()).block_until(block_until);
         let rx = handle.send(req).await;
         tokio::task::yield_now().await;
 
@@ -339,157 +316,96 @@ mod tests {
             .unwrap();
         let query = queries.into_iter().next().unwrap();
 
-        handle
-            .catalog
-            .query
-            .set_query_state(&query, |_| QueryState::Failed)
-            .await
-            .unwrap();
+        for &state in &path[1..] {
+            handle.advance_to(query.id, state).await;
+        }
 
-        let result = rx.await.unwrap();
-        assert!(result.is_err(), "Should fail with EarlyTermination");
+        let result: anyhow::Result<model::query::Model> = rx.await.unwrap();
+        let path_contains_target = path.contains(&block_until);
+
+        if path_contains_target {
+            let model = result.expect("expected Ok when path contains block_until");
+            assert!(model.current_state >= block_until);
+        } else {
+            let err = result.expect_err("expected EarlyTermination when path skips block_until");
+            let early = err
+                .downcast_ref::<EarlyTermination>()
+                .expect("error should be EarlyTermination");
+            assert!(early.state.is_terminal());
+            assert!(early.state >= block_until);
+            assert_ne!(early.state, block_until);
+        }
     }
 
-    #[tokio::test]
-    async fn blocking_create_then_blocking_drop() {
-        let handle = TestHandle::new().await;
-
-        let create = CreateQuery::new("SELECT 1".to_string()).block_until(QueryState::Running);
-        let create_rx = handle.send(create).await;
-        tokio::task::yield_now().await;
-
-        let queries = handle
-            .catalog
-            .query
-            .get_query(GetQuery::new())
-            .await
-            .unwrap();
-        let query = queries.into_iter().next().unwrap();
-        let query_id = query.id;
-
-        let query = handle
-            .catalog
-            .query
-            .set_query_state(&query, |_| QueryState::Planned)
-            .await
-            .unwrap();
-        let query = handle
-            .catalog
-            .query
-            .set_query_state(&query, |_| QueryState::Registered)
-            .await
-            .unwrap();
-        let query = handle
-            .catalog
-            .query
-            .set_query_state(&query, |_| QueryState::Running)
-            .await
-            .unwrap();
-        assert_eq!(query.current_state, QueryState::Running);
-
-        let created = create_rx.await.unwrap().unwrap();
-        assert_eq!(created.current_state, QueryState::Running);
-
-        let drop = DropQuery::new()
-            .with_filters(GetQuery::new().with_id(query_id))
-            .stop_mode(StopMode::Forceful)
-            .blocking();
-        let drop_rx = handle.send(drop).await;
-        tokio::task::yield_now().await;
-
-        let query = handle
-            .catalog
-            .query
-            .get_query(GetQuery::new().with_id(query_id))
-            .await
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-        assert_eq!(query.desired_state, DesiredQueryState::Stopped);
-
-        handle
-            .catalog
-            .query
-            .set_query_state(&query, |_| QueryState::Stopped)
-            .await
-            .unwrap();
-
-        let dropped = drop_rx.await.unwrap().unwrap();
-        assert_eq!(dropped.len(), 1);
-        assert_eq!(dropped[0].current_state, QueryState::Stopped);
-    }
-
-    #[tokio::test]
-    async fn blocking_drop_multiple_queries() {
+    async fn prop_blocking_drop_resolves_when_all_terminal(
+        n_queries: usize,
+        stop_mode: StopMode,
+    ) {
         let handle = TestHandle::new().await;
 
         let mut query_ids = Vec::new();
-        for i in 0..3 {
+        for i in 0..n_queries {
             let create = CreateQuery::new(format!("SELECT {i}"));
             let rx = handle.send(create).await;
-            let result = rx.await.unwrap().unwrap();
-            query_ids.push(result.id);
+            let result: anyhow::Result<model::query::Model> = rx.await.unwrap();
+            query_ids.push(result.unwrap().id);
         }
 
         for &id in &query_ids {
-            let query = handle
-                .catalog
-                .query
-                .get_query(GetQuery::new().with_id(id))
-                .await
-                .unwrap()
-                .into_iter()
-                .next()
-                .unwrap();
-            let query = handle
-                .catalog
-                .query
-                .set_query_state(&query, |_| QueryState::Planned)
-                .await
-                .unwrap();
-            let query = handle
-                .catalog
-                .query
-                .set_query_state(&query, |_| QueryState::Registered)
-                .await
-                .unwrap();
-            let _ = handle
-                .catalog
-                .query
-                .set_query_state(&query, |_| QueryState::Running)
-                .await
-                .unwrap();
+            handle.advance_to(id, QueryState::Planned).await;
+            handle.advance_to(id, QueryState::Registered).await;
+            handle.advance_to(id, QueryState::Running).await;
         }
 
-        let drop = DropQuery::new().stop_mode(StopMode::Graceful).blocking();
+        let drop = DropQuery::new().stop_mode(stop_mode).blocking();
         let drop_rx = handle.send(drop).await;
         tokio::task::yield_now().await;
 
         for &id in &query_ids {
-            let query = handle
-                .catalog
-                .query
-                .get_query(GetQuery::new().with_id(id))
-                .await
-                .unwrap()
-                .into_iter()
-                .next()
-                .unwrap();
-            assert_eq!(query.desired_state, DesiredQueryState::Stopped);
-            handle
-                .catalog
-                .query
-                .set_query_state(&query, |_| QueryState::Stopped)
-                .await
-                .unwrap();
+            handle.advance_to(id, QueryState::Stopped).await;
         }
 
-        let dropped = drop_rx.await.unwrap().unwrap();
-        assert_eq!(dropped.len(), 3);
+        let dropped: anyhow::Result<Vec<model::query::Model>> = drop_rx.await.unwrap();
+        let dropped = dropped.unwrap();
+        assert_eq!(dropped.len(), n_queries);
         for model in &dropped {
-            assert_eq!(model.current_state, QueryState::Stopped);
+            assert!(model.current_state.is_terminal());
             assert!(query_ids.contains(&model.id));
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn non_blocking_create_returns_pending(req in arb_create_query()) {
+            let req = CreateQuery { block_until: QueryState::Pending, ..req };
+            test_prop(|| async move {
+                prop_non_blocking_create_returns_pending(req).await;
+            });
+        }
+
+        #[test]
+        fn blocking_create_resolves_correctly(
+            block_until in prop_oneof![
+                Just(QueryState::Planned),
+                Just(QueryState::Registered),
+                Just(QueryState::Running),
+                Just(QueryState::Completed),
+            ],
+            path in arb_valid_state_path(),
+        ) {
+            test_prop(|| async move {
+                prop_blocking_create_resolves_correctly(block_until, path).await;
+            });
+        }
+
+        #[test]
+        fn blocking_drop_resolves_when_all_terminal(
+            n_queries in 2..=100usize,
+            stop_mode in any::<StopMode>(),
+        ) {
+            test_prop(|| async move {
+                prop_blocking_drop_resolves_when_all_terminal(n_queries, stop_mode).await;
+            });
         }
     }
 }

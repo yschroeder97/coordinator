@@ -43,7 +43,7 @@ impl SinkCatalog {
 mod tests {
     use super::*;
     use crate::Catalog;
-    use crate::test_utils::test_prop;
+    use crate::testing::test_prop;
     use model::testing::{SinkWithRefs, arb_sink_with_refs};
     use proptest::proptest;
 

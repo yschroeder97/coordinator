@@ -35,7 +35,7 @@ CREATE TRIGGER validate_query_state_transition
     FOR EACH ROW
     EXECUTE FUNCTION validate_query_state_transition();
 
-CREATE OR REPLACE FUNCTION reserve_worker_capacity()
+CREATE OR REPLACE FUNCTION acquire_worker_capacity()
 RETURNS TRIGGER AS $$
 BEGIN
     UPDATE worker
@@ -45,10 +45,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER reserve_worker_capacity
+CREATE TRIGGER acquire_worker_capacity
     AFTER INSERT ON fragment
     FOR EACH ROW
-    EXECUTE FUNCTION reserve_worker_capacity();
+    EXECUTE FUNCTION acquire_worker_capacity();
 
 CREATE OR REPLACE FUNCTION release_fragment_capacity()
 RETURNS TRIGGER AS $$
@@ -100,7 +100,7 @@ BEGIN
     IF q_state IN ('Running', 'Completed', 'Stopped', 'Failed') THEN
         UPDATE query SET
             start_timestamp = COALESCE(
-                (SELECT MAX(start_timestamp) FROM fragment WHERE query_id = NEW.query_id),
+                (SELECT MIN(start_timestamp) FROM fragment WHERE query_id = NEW.query_id),
                 start_timestamp
             ),
             stop_timestamp = CASE
@@ -111,6 +111,22 @@ BEGIN
                 )
                 ELSE stop_timestamp
             END
+        WHERE id = NEW.query_id;
+    END IF;
+
+    IF q_state = 'Failed' THEN
+        UPDATE query SET
+            error = (
+                SELECT jsonb_object_agg(
+                    f.host_addr,
+                    COALESCE(
+                        f.error->'WorkerInternal'->>'msg',
+                        f.error->'WorkerCommunication'->>'msg'
+                    )
+                )
+                FROM fragment f
+                WHERE f.query_id = NEW.query_id AND f.error IS NOT NULL
+            )
         WHERE id = NEW.query_id;
     END IF;
 

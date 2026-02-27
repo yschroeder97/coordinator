@@ -2,18 +2,14 @@ pub mod fragment;
 pub mod query_state;
 
 use crate::IntoCondition;
-use crate::query::fragment::{FragmentError, FragmentId};
 #[cfg(feature = "testing")]
 use proptest_derive::Arbitrary;
 use query_state::{DesiredQueryState, QueryState};
 use sea_orm::ActiveValue::{NotSet, Set};
 use sea_orm::Condition;
-use sea_orm::FromJsonQueryResult;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use strum::Display;
-use thiserror::Error;
 use uuid::Uuid;
 
 pub type QueryName = String;
@@ -32,7 +28,7 @@ pub struct Model {
     pub stop_timestamp: Option<chrono::DateTime<chrono::Local>>,
     pub stop_mode: Option<StopMode>,
     #[sea_orm(column_type = "JsonBinary")]
-    pub error: Option<QueryError>,
+    pub error: Option<serde_json::Value>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -49,23 +45,6 @@ impl Related<fragment::Entity> for Entity {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult, Error)]
-pub enum QueryError {
-    #[error("Planning failed: {0}")]
-    Planning(String),
-    #[error("Registration failed: {0:?}")]
-    Registering(HashMap<FragmentId, FragmentError>),
-    #[error("Starting failed: {0:?}")]
-    Starting(HashMap<FragmentId, FragmentError>),
-    #[error("Execution failed: {0:?}")]
-    Running(HashMap<FragmentId, FragmentError>),
-}
-
-impl From<anyhow::Error> for QueryError {
-    fn from(e: anyhow::Error) -> Self {
-        QueryError::Planning(e.to_string())
-    }
-}
 
 #[cfg_attr(feature = "testing", derive(Arbitrary))]
 #[derive(

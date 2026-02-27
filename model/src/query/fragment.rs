@@ -101,15 +101,6 @@ impl From<CreateFragment> for ActiveModel {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct FragmentUpdate {
-    pub id: FragmentId,
-    pub state: FragmentState,
-    pub start_timestamp: Option<chrono::DateTime<chrono::Local>>,
-    pub stop_timestamp: Option<chrono::DateTime<chrono::Local>>,
-    pub error: Option<FragmentError>,
-}
-
 #[derive(
     Clone,
     Copy,
@@ -136,6 +127,24 @@ pub enum FragmentState {
     Failed,
 }
 
+impl FragmentState {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Stopped | Self::Failed)
+    }
+
+    pub fn next(self) -> Option<Self> {
+        match self {
+            Self::Pending => Some(Self::Registered),
+            Self::Registered => Some(Self::Started),
+            Self::Started => Some(Self::Running),
+            Self::Running => Some(Self::Completed),
+            Self::Completed => None,
+            Self::Stopped => None,
+            Self::Failed => None,
+        }
+    }
+}
+
 /// Conversion from gRPC worker response integers.
 /// Workers only return Registered(0), Started(1), Running(2), Stopped(3), Failed(4).
 impl From<i32> for FragmentState {
@@ -148,38 +157,5 @@ impl From<i32> for FragmentState {
             4 => FragmentState::Failed,
             _ => panic!("Tag {value} cannot be converted"),
         }
-    }
-}
-
-impl From<Vec<FragmentState>> for QueryState {
-    fn from(states: Vec<FragmentState>) -> Self {
-        if states.contains(&FragmentState::Failed) {
-            return QueryState::Failed;
-        }
-        // All completed means query completed
-        if states.iter().all(|s| *s == FragmentState::Completed) {
-            return QueryState::Completed;
-        }
-        // All stopped means query stopped
-        if states.iter().all(|s| *s == FragmentState::Stopped) {
-            return QueryState::Stopped;
-        }
-        // All running or started means query is running
-        if states
-            .iter()
-            .all(|s| *s == FragmentState::Running || *s == FragmentState::Started)
-        {
-            return QueryState::Running;
-        }
-        // All registered means query is registered
-        if states.iter().all(|s| *s == FragmentState::Registered) {
-            return QueryState::Registered;
-        }
-        // All pending means query is still pending (planning)
-        if states.iter().all(|s| *s == FragmentState::Pending) {
-            return QueryState::Pending;
-        }
-        // Mixed QueryState - default to the "lowest" active state
-        QueryState::Pending
     }
 }

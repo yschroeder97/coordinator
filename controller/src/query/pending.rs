@@ -1,16 +1,15 @@
 use crate::query::planned::Planned;
 use crate::query::reconciler::{QueryContext, Transition};
 use model::query::fragment::CreateFragment;
-use model::query::*;
+use model::query::StopMode;
 use tracing::info;
 
 pub struct Pending;
 
 impl Transition for Pending {
     type Next = Planned;
-    type Error = anyhow::Error;
 
-    async fn advance(&mut self, ctx: &mut QueryContext) -> Result<Planned, Self::Error> {
+    async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Planned> {
         info!("Planning");
 
         #[cfg(feature = "testing")]
@@ -31,5 +30,5 @@ impl Transition for Pending {
         Ok(Planned { fragments })
     }
 
-    async fn cleanup(self, _ctx: &mut QueryContext, _mode: StopMode) {}
+    async fn rollback(self, _ctx: &mut QueryContext, _mode: StopMode) {}
 }

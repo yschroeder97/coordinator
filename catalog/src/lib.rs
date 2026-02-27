@@ -5,8 +5,8 @@ pub mod sink_catalog;
 pub mod source_catalog;
 pub mod worker_catalog;
 
-#[cfg(test)]
-pub mod test_utils;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 pub use notification::Reconcilable;
 

@@ -4,7 +4,7 @@
 
 use crate::query::fragment::CreateFragment;
 use crate::query::query_state::QueryState;
-use crate::query::{CreateQuery, DropQuery, GetQuery, QueryId, StopMode};
+use crate::query::CreateQuery;
 use crate::sink::{CreateSink, SinkType};
 use crate::source::logical_source::CreateLogicalSource;
 use crate::source::physical_source::{CreatePhysicalSource, SourceType};
@@ -171,12 +171,12 @@ impl FragmentSetup {
 ///
 /// Generates 1..=`max_workers` unique workers and 1..=20 fragment specs,
 /// distributing fragments round-robin across workers while respecting capacity
-/// constraints. Each fragment gets `used_capacity` in `0..=1` and `has_source`
+/// constraints. Each fragment gets `used_capacity` in `0..=16` and `has_source`
 /// randomly.
 pub fn arb_fragment_setup(max_workers: usize) -> impl Strategy<Value = FragmentSetup> {
     (
         arb_unique_workers(max_workers),
-        prop::collection::vec((0..=1i32, any::<bool>()), 1..=20usize),
+        prop::collection::vec((0..=16i32, any::<bool>()), 1..=20usize),
     )
         .prop_map(|(workers, fragment_params)| {
             let mut remaining_capacity: Vec<i32> = workers.iter().map(|w| w.capacity).collect();
@@ -249,20 +249,6 @@ prop_compose! {
         ],
     ) -> CreateQuery {
         CreateQuery::new(statement).name(name).block_until(block_until)
-    }
-}
-
-prop_compose! {
-    pub fn arb_drop_query(query_id: QueryId)(
-        stop_mode in any::<StopMode>(),
-        should_block in any::<bool>(),
-    ) -> DropQuery {
-        DropQuery {
-            should_block,
-            ..DropQuery::new()
-                .stop_mode(stop_mode)
-                .with_filters(GetQuery::new().with_id(query_id))
-        }
     }
 }
 

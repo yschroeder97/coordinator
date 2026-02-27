@@ -25,4 +25,6 @@ tonic-build.workspace = true
 [dev-dependencies]
 catalog = { workspace = true, features = ["testing"] }
 model = { workspace = true, features = ["testing"] }
+proptest = "1.5"
+serde_json.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

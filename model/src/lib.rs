@@ -6,6 +6,7 @@ pub mod worker;
 #[cfg(feature = "testing")]
 pub mod testing;
 
+pub use sea_orm::Set;
 use sea_orm::Condition;
 
 /// Trait for types that can be converted into a SeaORM Condition for filtering queries.

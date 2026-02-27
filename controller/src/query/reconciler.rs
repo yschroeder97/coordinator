@@ -11,19 +11,20 @@ use crate::query::running::Running;
 use catalog::Catalog;
 use futures_util::future;
 use model::query;
-use model::query::fragment::{self, FragmentError, FragmentId, FragmentState, FragmentUpdate};
+use model::Set;
+use model::query::fragment::{self, FragmentError, FragmentId, FragmentState};
+use model::query::StopMode;
 use model::query::query_state::QueryState;
-use model::query::*;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio_retry::RetryIf;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::{debug, error, info, warn};
 
-const MAX_RPC_ATTEMPTS: usize = 3;
+const MAX_RPC_ATTEMPTS: usize = 5;
 const RPC_RETRY_BASE_MS: u64 = 50;
 
-pub(crate) enum State {
+pub(crate) enum QueryStateInternal {
     Pending(Pending),
     Planned(Planned),
     Registered(Registered),
@@ -33,16 +34,16 @@ pub(crate) enum State {
     Failed,
 }
 
-impl State {
+impl QueryStateInternal {
     async fn from_current(query: &query::Model, catalog: &Catalog) -> Self {
         match query.current_state {
-            QueryState::Pending => State::Pending(Pending),
+            QueryState::Pending => QueryStateInternal::Pending(Pending),
             QueryState::Planned | QueryState::Registered | QueryState::Running => {
                 let fragments = catalog.query.get_fragments(query.id).await.unwrap();
                 match query.current_state {
-                    QueryState::Planned => State::Planned(Planned { fragments }),
-                    QueryState::Registered => State::Registered(Registered { fragments }),
-                    QueryState::Running => State::Running(Running { fragments }),
+                    QueryState::Planned => QueryStateInternal::Planned(Planned { fragments }),
+                    QueryState::Registered => QueryStateInternal::Registered(Registered { fragments }),
+                    QueryState::Running => QueryStateInternal::Running(Running { fragments }),
                     _ => unreachable!(),
                 }
             }
@@ -53,36 +54,35 @@ impl State {
     }
 }
 
-impl From<Planned> for State {
+impl From<Planned> for QueryStateInternal {
     fn from(s: Planned) -> Self {
-        State::Planned(s)
+        QueryStateInternal::Planned(s)
     }
 }
 
-impl From<Registered> for State {
+impl From<Registered> for QueryStateInternal {
     fn from(s: Registered) -> Self {
-        State::Registered(s)
+        QueryStateInternal::Registered(s)
     }
 }
 
-impl From<Running> for State {
+impl From<Running> for QueryStateInternal {
     fn from(s: Running) -> Self {
-        State::Running(s)
+        QueryStateInternal::Running(s)
     }
 }
 
-impl From<Completed> for State {
+impl From<Completed> for QueryStateInternal {
     fn from(_: Completed) -> Self {
-        State::Completed
+        QueryStateInternal::Completed
     }
 }
 
 pub trait Transition: Sized {
-    type Next: Into<State>;
-    type Error: Into<QueryError>;
+    type Next: Into<QueryStateInternal>;
 
-    async fn advance(&mut self, ctx: &mut QueryContext) -> Result<Self::Next, Self::Error>;
-    async fn cleanup(self, ctx: &mut QueryContext, mode: StopMode);
+    async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Self::Next>;
+    async fn rollback(self, ctx: &mut QueryContext, mode: StopMode);
 }
 
 pub struct QueryContext {
@@ -102,20 +102,21 @@ impl QueryContext {
         Rsp: Send + 'static,
     {
         let mk_rpc = &mk_rpc;
-        let futs = fragments.iter().map(|f| {
+        let futures = fragments.iter().map(|fragment| {
             let registry = self.worker_registry.clone();
-            let addr = f.grpc_addr.clone();
+            let addr = fragment.grpc_addr.clone();
             async move {
                 let strategy = ExponentialBackoff::from_millis(RPC_RETRY_BASE_MS)
                     .map(jitter)
                     .take(MAX_RPC_ATTEMPTS - 1);
+                
                 RetryIf::spawn(
                     strategy,
                     || {
                         let registry = registry.clone();
                         let addr = addr.clone();
                         async move {
-                            let (rx, rpc) = mk_rpc(f.id);
+                            let (rx, rpc) = mk_rpc(fragment.id);
                             registry.send(&addr, rpc).await?;
                             let rsp: Rsp = rx
                                 .await
@@ -129,7 +130,7 @@ impl QueryContext {
                 .await
             }
         });
-        future::join_all(futs).await
+        future::join_all(futures).await
     }
 
     pub(crate) async fn register_fragments(
@@ -180,47 +181,56 @@ impl QueryContext {
         .await
     }
 
-    /// Map RPC results to fragment updates, persist them, and bail if the query reached a
-    /// terminal state (i.e. at least one fragment failed).
+    /// Map RPC results to fragment active model updates, persist them, and return the
+    /// updated fragments. Bails if at least one fragment failed and the query reached
+    /// a terminal state.
     pub(crate) async fn apply_rpc_results(
         &mut self,
         fragments: &[fragment::Model],
         results: Vec<Result<(), WorkerError>>,
-        success_state: FragmentState,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<fragment::Model>> {
+        debug_assert!(!fragments.is_empty(), "More than one fragment expected");
+        debug_assert!(
+            fragments
+                .iter()
+                .all(|f| f.current_state == fragments.last().unwrap().current_state),
+            "All fragments should be in the same state"
+        );
+        let current_state = fragments.last().unwrap().current_state;
+        let target_state = current_state.next().expect("Cannot advance a terminal fragment state");
+
         let updates = fragments
             .iter()
             .zip(results)
-            .map(|(f, r)| match r {
-                Ok(_) => FragmentUpdate {
-                    id: f.id,
-                    state: success_state,
-                    ..Default::default()
-                },
-                Err(e) => {
-                    let error = FragmentError::from(e);
-                    warn!(fragment_id = f.id, %error, "Fragment failed during RPC");
-                    FragmentUpdate {
-                        id: f.id,
-                        state: FragmentState::Failed,
-                        error: Some(error),
-                        ..Default::default()
+            .map(|(fragment, rpc_result)| {
+                let mut am: fragment::ActiveModel = fragment.clone().into();
+                match rpc_result {
+                    Ok(_) => am.current_state = Set(target_state),
+                    Err(e) => {
+                        let error = FragmentError::from(e);
+                        warn!(fragment_id = fragment.id, %error, "Fragment transition failed");
+                        am.current_state = Set(FragmentState::Failed);
+                        am.error = Set(Some(error));
                     }
                 }
+                am
             })
             .collect();
-        self.query = self
+
+        let (query, fragments) = self
             .catalog
             .query
             .update_fragment_states(self.query.id, updates)
             .await?;
+        self.query = query;
+
         if self.query.current_state.is_terminal() {
-            anyhow::bail!("Transition to {success_state} failed");
+            anyhow::bail!("Transition to {target_state} failed");
         }
-        Ok(())
+        Ok(fragments)
     }
 
-    pub(crate) async fn cleanup_stop(&self, mode: StopMode, fragments: &[fragment::Model]) {
+    pub(crate) async fn rollback_stop(&self, mode: StopMode, fragments: &[fragment::Model]) {
         for e in self
             .stop_fragments(mode, fragments)
             .await
@@ -231,7 +241,7 @@ impl QueryContext {
         }
     }
 
-    pub(crate) async fn cleanup_unregister(&self, fragments: &[fragment::Model]) {
+    pub(crate) async fn rollback_unregister(&self, fragments: &[fragment::Model]) {
         for e in self
             .unregister_fragments(fragments)
             .await
@@ -242,18 +252,14 @@ impl QueryContext {
         }
     }
 
-    pub(crate) async fn persist_stopped(&self) {
-        if let Err(e) = self
-            .catalog
-            .query
-            .set_query_state(&self.query, |_| QueryState::Stopped)
-            .await
-        {
-            error!("Failed to set query to Stopped: {e}");
+    pub(crate) async fn persist_stopped(&mut self) {
+        match self.catalog.query.stop_query(&self.query).await {
+            Ok(query) => self.query = query,
+            Err(e) => error!("Failed to stop query: {e}"),
         }
     }
 
-    pub(crate) async fn persist_failed(&self, error: QueryError) {
+    pub(crate) async fn persist_failed(&self, error: String) {
         if let Err(e) = self
             .catalog
             .query
@@ -269,25 +275,24 @@ async fn try_transition<T: Transition>(
     mut state: T,
     ctx: &mut QueryContext,
     stop_rx: &mut flume::Receiver<StopMode>,
-) -> State {
+) -> QueryStateInternal {
     tokio::select! {
-        result = state.advance(ctx) => match result {
+        result = state.transition(ctx) => match result {
             Ok(next) => next.into(),
             Err(e) => {
-                state.cleanup(ctx, StopMode::Forceful).await;
+                state.rollback(ctx, StopMode::Forceful).await;
                 if ctx.query.error.is_none() {
-                    let query_error: QueryError = e.into();
-                    warn!("Transition failed: {query_error:?}");
-                    ctx.persist_failed(query_error).await;
+                    warn!("Transition failed: {e:#}");
+                    ctx.persist_failed(format!("{e:#}")).await;
                 }
-                State::Failed
+                QueryStateInternal::Failed
             }
         },
         Ok(mode) = stop_rx.recv_async() => {
             info!(?mode, "Stopping query");
-            state.cleanup(ctx, mode).await;
+            state.rollback(ctx, mode).await;
             ctx.persist_stopped().await;
-            State::Stopped
+            QueryStateInternal::Stopped
         }
     }
 }
@@ -297,18 +302,18 @@ pub struct QueryReconciler;
 impl QueryReconciler {
     pub async fn run(mut ctx: QueryContext, mut stop_rx: flume::Receiver<StopMode>) {
         info!("Starting reconciliation");
-        let mut state = State::from_current(&ctx.query, &ctx.catalog).await;
+        let mut state = QueryStateInternal::from_current(&ctx.query, &ctx.catalog).await;
         loop {
             state = match state {
-                State::Pending(s) => try_transition(s, &mut ctx, &mut stop_rx).await,
-                State::Planned(s) => try_transition(s, &mut ctx, &mut stop_rx).await,
-                State::Registered(s) => try_transition(s, &mut ctx, &mut stop_rx).await,
-                State::Running(s) => try_transition(s, &mut ctx, &mut stop_rx).await,
+                QueryStateInternal::Pending(s) => try_transition(s, &mut ctx, &mut stop_rx).await,
+                QueryStateInternal::Planned(s) => try_transition(s, &mut ctx, &mut stop_rx).await,
+                QueryStateInternal::Registered(s) => try_transition(s, &mut ctx, &mut stop_rx).await,
+                QueryStateInternal::Running(s) => try_transition(s, &mut ctx, &mut stop_rx).await,
                 terminal => {
                     let label = match terminal {
-                        State::Completed => "Completed",
-                        State::Stopped => "Stopped",
-                        State::Failed => "Failed",
+                        QueryStateInternal::Completed => "Completed",
+                        QueryStateInternal::Stopped => "Stopped",
+                        QueryStateInternal::Failed => "Failed",
                         _ => unreachable!(),
                     };
                     info!("Reconciliation finished: {label}");
