@@ -2,6 +2,7 @@ use crate::request_handler::RequestHandler;
 use anyhow::Result;
 use catalog::Catalog;
 use catalog::database::StateBackend;
+use controller::cluster::health_monitor::HealthMonitor;
 use controller::cluster::service::ClusterService;
 use controller::into_request;
 use controller::query::service::QueryService;
@@ -130,6 +131,14 @@ pub fn start(
                     .await
             });
 
+            let health_catalog = catalog.worker.clone();
+            tokio::spawn(async move {
+                HealthMonitor::new(health_catalog)
+                    .run()
+                    .instrument(info_span!("health_monitor"))
+                    .await
+            });
+
             let query_catalog = catalog.clone();
             tokio::spawn(async move {
                 QueryService::new(query_catalog, worker_registry)
@@ -163,6 +172,14 @@ pub async fn start_for_test() -> flume::Sender<CoordinatorRequest> {
         cluster_service
             .run()
             .instrument(info_span!("cluster_service"))
+            .await
+    });
+
+    let health_catalog = catalog.worker.clone();
+    tokio::spawn(async move {
+        HealthMonitor::new(health_catalog)
+            .run()
+            .instrument(info_span!("health_monitor"))
             .await
     });
 

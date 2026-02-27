@@ -9,7 +9,7 @@ use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tonic::transport::{Channel, Endpoint};
 use tracing::{Instrument, debug, info, instrument, warn};
 
-mod worker_rpc_service {
+pub mod worker_rpc_service {
     tonic::include_proto!("worker_rpc");
 }
 

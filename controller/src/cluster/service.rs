@@ -44,16 +44,17 @@ impl ClusterService {
     }
 
     pub async fn run(&mut self) {
-        let mut workers = self.worker_catalog.subscribe_intent();
+        let mut intent_rx = self.worker_catalog.subscribe_intent();
+        let mut state_rx = self.worker_catalog.subscribe_state();
         info!("Starting");
         self.reconcile().await;
 
         loop {
             tokio::select! {
-                result = workers.changed() => {
-                    // Catalogs should outlive this task
+                result = intent_rx.changed() => {
                     result.expect("Worker catalog notification channel closed unexpectedly");
                 }
+                Ok(()) = state_rx.changed() => {}
                 Some(result) = self.connecting.join_next() => {
                     match result {
                         Ok(client_or_err) => self.on_progress_connecting(client_or_err).await,
@@ -80,19 +81,26 @@ impl ClusterService {
         for mismatch in mismatched_workers {
             let addr = mismatch.grpc_addr.clone();
             match mismatch.desired_state {
-                // No task running for this worker, spawn & insert
-                DesiredWorkerState::Active if !self.workers.contains_key(&addr) => {
-                    let handle = self.connecting.spawn(WorkerClient::connect(addr.clone()));
-                    self.workers.insert(
-                        addr,
-                        Connecting {
-                            model: mismatch,
-                            handle,
-                        },
-                    );
+                DesiredWorkerState::Active => match self.workers.get(&addr) {
+                    Some(Active { .. })
+                        if mismatch.current_state == WorkerState::Unreachable =>
+                    {
+                        self.workers.remove(&addr);
+                        self.registry.unregister(&addr);
+                        info!("Tearing down unreachable worker {}, will retry", addr);
+                        let handle =
+                            self.connecting.spawn(WorkerClient::connect(addr.clone()));
+                        self.workers
+                            .insert(addr, Connecting { model: mismatch, handle });
+                    }
+                    None => {
+                        let handle =
+                            self.connecting.spawn(WorkerClient::connect(addr.clone()));
+                        self.workers
+                            .insert(addr, Connecting { model: mismatch, handle });
+                    }
+                    _ => {}
                 }
-                // Task is already running, noop
-                DesiredWorkerState::Active => {}
                 // Worker should be removed, remove from internal state and
                 // either cancel the connection task or just unregister and drop the client task
                 DesiredWorkerState::Removed => {

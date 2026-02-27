@@ -6,13 +6,20 @@ use tonic::metadata::MetadataMap;
 use tonic::{Code, Request, Response, Status};
 use tracing::{error, info, instrument};
 
+use controller::cluster::worker_client::worker_rpc_service;
+use controller::cluster::health_monitor::health_proto;
+
 use worker_rpc_service::worker_rpc_service_server::WorkerRpcService;
+pub use worker_rpc_service::worker_rpc_service_server::WorkerRpcServiceServer;
 use worker_rpc_service::worker_status_response::{ActiveQuery, TerminatedQuery};
 use worker_rpc_service::{
     QueryLogReply, QueryLogRequest, QueryStatusReply, QueryStatusRequest, RegisterQueryReply,
     RegisterQueryRequest, StartQueryRequest, StopQueryRequest, UnregisterQueryRequest,
     WorkerStatusRequest, WorkerStatusResponse,
 };
+
+pub use health_proto::health_server::HealthServer;
+
 type FragmentId = u64;
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -37,8 +44,19 @@ impl From<QueryFragmentState> for i32 {
     }
 }
 
-pub mod worker_rpc_service {
-    tonic::include_proto!("worker_rpc");
+#[derive(Default)]
+pub struct HealthServiceImpl;
+
+#[tonic::async_trait]
+impl health_proto::health_server::Health for HealthServiceImpl {
+    async fn check(
+        &self,
+        _request: Request<health_proto::HealthCheckRequest>,
+    ) -> Result<Response<health_proto::HealthCheckResponse>, Status> {
+        Ok(Response::new(health_proto::HealthCheckResponse {
+            status: health_proto::health_check_response::ServingStatus::Serving as i32,
+        }))
+    }
 }
 
 #[derive(Default, Clone)]

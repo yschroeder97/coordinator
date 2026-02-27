@@ -1,12 +1,11 @@
 #![cfg(madsim)]
-use crate::worker::SingleNodeWorker;
-use crate::worker::worker_rpc_service::worker_rpc_service_server::WorkerRpcServiceServer;
+use crate::worker::{HealthServer, HealthServiceImpl, SingleNodeWorker, WorkerRpcServiceServer};
 use anyhow::Result;
 use controller::request::Request;
 use coordinator::coordinator::{CoordinatorRequest, start_for_test};
 use futures::future::join_all;
+use madsim::rand::{Rng, thread_rng};
 use madsim::runtime::{Handle, NodeHandle};
-use rand::Rng;
 use std::fmt::Debug;
 use std::time::Duration;
 use tonic::transport::Server;
@@ -106,6 +105,7 @@ impl Cluster {
 
                     Server::builder()
                         .add_service(svc)
+                        .add_service(HealthServer::new(HealthServiceImpl))
                         .serve("0.0.0.0:8080".parse().unwrap())
                         .await
                         .expect("Worker could not be started");
@@ -118,7 +118,7 @@ impl Cluster {
     pub async fn kill_node(&self, opts: &KillOpts) {
         let mut nodes = vec![];
         for i in 1..=self.config.num_workers {
-            if rand::rng().random_bool(opts.kill_rate as f64) {
+            if thread_rng().gen_bool(opts.kill_rate as f64) {
                 nodes.push(format!("worker-{}", i));
             }
         }
@@ -141,14 +141,14 @@ impl Cluster {
             let name = name.as_ref();
 
             // Random jitter before kill (0-1s)
-            let t = rand::rng().random_range(Duration::from_secs(0)..Duration::from_secs(1));
+            let t = thread_rng().gen_range(Duration::from_secs(0)..Duration::from_secs(1));
             tokio::time::sleep(t).await;
             info!("kill {name}");
             Handle::current().kill(name);
 
             // Random jitter before restart (0-1s), with 10% chance of a long delay
-            let mut t = rand::rng().random_range(Duration::from_secs(0)..Duration::from_secs(1));
-            if rand::rng().random_bool(0.1) {
+            let mut t = thread_rng().gen_range(Duration::from_secs(0)..Duration::from_secs(1));
+            if thread_rng().gen_bool(0.1) {
                 t += Duration::from_secs(restart_delay_secs as u64);
             }
             tokio::time::sleep(t).await;

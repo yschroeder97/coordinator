@@ -2,8 +2,8 @@
 use crate::cluster::{Cluster, ClusterConfig};
 use model::query::query_state::QueryState;
 use model::query::{CreateQuery, DropQuery, GetQuery, StopMode};
-use model::worker::{CreateWorker, GetWorker, WorkerState};
 use model::worker::endpoint::NetworkAddr;
+use model::worker::{CreateWorker, GetWorker, WorkerState};
 use std::time::Duration;
 
 async fn setup_cluster(num_workers: usize, worker_capacity: i32) -> Cluster {
@@ -11,7 +11,10 @@ async fn setup_cluster(num_workers: usize, worker_capacity: i32) -> Cluster {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
 
-    let cluster = Cluster::start(ClusterConfig { num_workers })
+    let cluster = Cluster::start(ClusterConfig {
+        num_workers,
+        ..Default::default()
+    })
         .await
         .unwrap();
 
@@ -220,4 +223,63 @@ async fn concurrent_queries_all_reach_running() {
             remaining.len()
         );
     }
+}
+
+#[madsim::test]
+async fn worker_killed_becomes_unreachable_and_recovers() {
+    let cluster = setup_cluster(2, 100).await;
+
+    let worker_1_host = NetworkAddr::new("192.168.2.1".to_string(), 9090);
+
+    cluster.simple_kill_nodes(vec!["worker-1"]).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        let workers: Vec<model::worker::Model> = cluster
+            .send(GetWorker::all().with_host_addr(worker_1_host.clone()))
+            .await
+            .unwrap();
+
+        if workers[0].current_state == WorkerState::Unreachable {
+            break;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Timed out waiting for worker-1 to become Unreachable (current: {:?})",
+            workers[0].current_state
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
+    cluster.simple_restart_nodes(vec!["worker-1"]).await;
+
+    loop {
+        let workers: Vec<model::worker::Model> = cluster
+            .send(GetWorker::all().with_host_addr(worker_1_host.clone()))
+            .await
+            .unwrap();
+
+        if workers[0].current_state == WorkerState::Active {
+            break;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Timed out waiting for worker-1 to become Active again (current: {:?})",
+            workers[0].current_state
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
+    let worker_2_host = NetworkAddr::new("192.168.2.2".to_string(), 9090);
+    let workers: Vec<model::worker::Model> = cluster
+        .send(GetWorker::all().with_host_addr(worker_2_host))
+        .await
+        .unwrap();
+    assert_eq!(
+        workers[0].current_state,
+        WorkerState::Active,
+        "Worker-2 should have remained Active"
+    );
 }
