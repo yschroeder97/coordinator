@@ -89,7 +89,7 @@ pub struct GetPhysicalSource {
 }
 
 impl GetPhysicalSource {
-    pub fn new() -> Self {
+    pub fn all() -> Self {
         Self::default()
     }
 
@@ -130,7 +130,7 @@ pub struct DropPhysicalSource {
 }
 
 impl DropPhysicalSource {
-    pub fn new() -> Self {
+    pub fn all() -> Self {
         Self::default()
     }
 

@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use madsim::rand::{Rng, thread_rng};
 use tonic::metadata::MetadataMap;
 use tonic::{Code, Request, Response, Status};
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 use controller::cluster::worker_client::worker_rpc_service;
 use controller::cluster::health_monitor::health_proto;
@@ -144,7 +144,7 @@ impl WorkerRpcService for SingleNodeWorker {
         let id = request.get_ref().query_id;
         self.fragments.write().unwrap().insert(id, QueryFragment::default());
 
-        info!("Registered new query: {}", id);
+        debug!("Registered new query: {}", id);
         Ok(Response::new(RegisterQueryReply {}))
     }
 
@@ -157,7 +157,7 @@ impl WorkerRpcService for SingleNodeWorker {
         match self.fragments.write().unwrap().remove(&query_id) {
             Some(_) => {
                 self.maybe_fail()?;
-                info!("Unregistered query");
+                debug!("Unregistered query");
                 Ok(Response::new(()))
             }
             None => Err(Self::query_not_found_error(query_id)),
@@ -173,7 +173,7 @@ impl WorkerRpcService for SingleNodeWorker {
         self.with_query_mut(query_id, |query| {
             query.state = QueryFragmentState::Running;
             query.started = Self::current_timestamp_ms();
-            info!("Started query");
+            debug!("Started query");
         })?;
         Ok(Response::new(()))
     }
@@ -184,7 +184,7 @@ impl WorkerRpcService for SingleNodeWorker {
         self.with_query_mut(query_id, |query| {
             query.state = QueryFragmentState::Stopped;
             query.terminated = Self::current_timestamp_ms();
-            info!("Stopped query");
+            debug!("Stopped query");
         })?;
         Ok(Response::new(()))
     }

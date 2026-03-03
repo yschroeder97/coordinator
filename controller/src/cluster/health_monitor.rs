@@ -16,10 +16,10 @@ use health_proto::health_check_response::ServingStatus;
 use health_proto::health_client::HealthClient;
 use health_proto::HealthCheckRequest;
 
-const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+pub const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+pub const FAILURE_THRESHOLD: u32 = 3;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
-const FAILURE_THRESHOLD: u32 = 3;
 
 pub struct HealthMonitor {
     catalog: Arc<WorkerCatalog>,

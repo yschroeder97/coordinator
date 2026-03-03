@@ -9,6 +9,7 @@ use crate::query::retry::RetryPolicy;
 use model::Set;
 use model::query::StopMode;
 use model::query::fragment::{self, FragmentError, FragmentState};
+use model::query::query_state::QueryState;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -53,10 +54,9 @@ impl Running {
 
 impl Transition for Running {
     type Next = Completed;
+    const STATE: QueryState = QueryState::Running;
 
     async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Completed> {
-        info!("Polling fragment status");
-
         loop {
             tokio::time::sleep(QUERY_POLLING_INTERVAL).await;
 
@@ -73,7 +73,13 @@ impl Transition for Running {
                     }
                 };
 
-                let state = FragmentState::from(reply.state);
+                let state = match FragmentState::try_from(reply.state) {
+                    Ok(state) => state,
+                    Err(tag) => {
+                        warn!("Fragment {} returned unknown state tag {tag}", fragment.id);
+                        continue;
+                    }
+                };
                 let start_timestamp = reply
                     .metrics
                     .as_ref()
@@ -130,7 +136,7 @@ impl Transition for Running {
             }
 
             if ctx.query.current_state.is_terminal() {
-                if ctx.query.current_state == model::query::query_state::QueryState::Failed {
+                if ctx.query.current_state == QueryState::Failed {
                     return Err(anyhow::anyhow!("Query failed during execution"));
                 }
                 info!("All fragments completed");

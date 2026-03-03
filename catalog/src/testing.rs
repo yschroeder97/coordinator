@@ -3,7 +3,7 @@ use model::query;
 use model::query::fragment::{self, CreateFragment, FragmentState};
 use model::query::query_state::QueryState;
 use model::query::GetQuery;
-use model::testing::FragmentSetup;
+use model::testing::ValidFragments;
 use sea_orm::ActiveValue::Set;
 use std::future::Future;
 use std::sync::Arc;
@@ -45,7 +45,7 @@ pub async fn advance_all_fragments(
 pub async fn walk_query_via_fragments(
     catalog: &Catalog,
     created: &query::Model,
-    setup: &FragmentSetup,
+    setup: &ValidFragments,
     path: &[QueryState],
 ) -> Vec<query::Model> {
     let mut models = vec![created.clone()];
@@ -91,7 +91,7 @@ pub async fn walk_query_via_fragments(
 pub async fn advance_query_to(catalog: &Arc<Catalog>, query_id: i64, target: QueryState) {
     let query = catalog
         .query
-        .get_query(GetQuery::new().with_id(query_id))
+        .get_query(GetQuery::all().with_id(query_id))
         .await
         .unwrap()
         .into_iter()

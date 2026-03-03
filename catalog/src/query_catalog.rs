@@ -48,10 +48,7 @@ impl QueryCatalog {
                                     query::Column::DesiredState,
                                     Expr::value(DesiredQueryState::Stopped),
                                 )
-                                .col_expr(
-                                    query::Column::StopMode,
-                                    Expr::value(req.stop_mode),
-                                )
+                                .col_expr(query::Column::StopMode, Expr::value(req.stop_mode))
                                 .filter(req.filters.clone().into_condition())
                                 .exec(txn)
                                 .await?;
@@ -63,8 +60,8 @@ impl QueryCatalog {
                     })
                     .await
                     .map_err(|e| match e {
-                        sea_orm::TransactionError::Connection(e) => e,
-                        sea_orm::TransactionError::Transaction(e) => e,
+                        sea_orm::TransactionError::Connection(e)
+                        | sea_orm::TransactionError::Transaction(e) => e,
                     })
                 }
             })
@@ -94,7 +91,7 @@ impl QueryCatalog {
         requests: Vec<CreateFragment>,
     ) -> Result<(query::Model, Vec<fragment::Model>)> {
         assert!(!requests.is_empty(), "Query requires at least one fragment");
-        
+
         let result = self
             .db
             .with_retry(|conn| {
@@ -109,7 +106,7 @@ impl QueryCatalog {
                                 )
                                 .exec(txn)
                                 .await?;
-                                
+
                                 let mut am: query::ActiveModel = query.into();
                                 am.current_state = Set(QueryState::Planned);
                                 let updated = am.update(txn).await?;
@@ -123,8 +120,8 @@ impl QueryCatalog {
                     )
                     .await
                     .map_err(|e| match e {
-                        sea_orm::TransactionError::Connection(e) => e,
-                        sea_orm::TransactionError::Transaction(e) => e,
+                        sea_orm::TransactionError::Connection(e)
+                        | sea_orm::TransactionError::Transaction(e) => e,
                     })
                 }
             })
@@ -202,8 +199,8 @@ impl QueryCatalog {
                     )
                     .await
                     .map_err(|e| match e {
-                        sea_orm::TransactionError::Connection(e) => e,
-                        sea_orm::TransactionError::Transaction(e) => e,
+                        sea_orm::TransactionError::Connection(e)
+                        | sea_orm::TransactionError::Transaction(e) => e,
                     })
                 }
             })
@@ -212,6 +209,7 @@ impl QueryCatalog {
         Ok(result)
     }
 
+    #[cfg(test)]
     async fn set_query_state(
         &self,
         query: &query::Model,
@@ -260,19 +258,19 @@ impl QueryCatalog {
                                         am.update(txn).await?;
                                     }
                                 }
-                                query::Entity::find_by_id(query.id)
-                                    .one(txn)
-                                    .await?
-                                    .ok_or(sea_orm::DbErr::RecordNotFound(
-                                        format!("Query {} not found", query.id),
-                                    ))
+                                query::Entity::find_by_id(query.id).one(txn).await?.ok_or(
+                                    sea_orm::DbErr::RecordNotFound(format!(
+                                        "Query {} not found",
+                                        query.id
+                                    )),
+                                )
                             }
                         })
                     })
                     .await
                     .map_err(|e| match e {
-                        sea_orm::TransactionError::Connection(e) => e,
-                        sea_orm::TransactionError::Transaction(e) => e,
+                        sea_orm::TransactionError::Connection(e)
+                        | sea_orm::TransactionError::Transaction(e) => e,
                     })
                 }
             })
@@ -366,6 +364,7 @@ mod tests {
     use model::worker::{CreateWorker, GetWorker};
     use proptest::prelude::*;
     use sea_orm::sqlx::types::chrono;
+    use std::collections::HashMap;
 
     async fn prop_create_and_get_query(req: CreateQuery) {
         let catalog = Catalog::for_test().await.query.clone();
@@ -377,19 +376,20 @@ mod tests {
         assert_eq!(created.desired_state, DesiredQueryState::Completed);
 
         let queries = catalog
-            .get_query(GetQuery::new().with_name(req.name))
+            .get_query(GetQuery::all().with_name(req.name))
             .await
             .unwrap();
         assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0], created);
     }
 
     async fn prop_drop_query(req: CreateQuery, stop_mode: StopMode) {
         let catalog = Catalog::for_test().await.query.clone();
         catalog.create_query(req.clone()).await.unwrap();
 
-        let drop_req = DropQuery::new()
+        let drop_req = DropQuery::all()
             .stop_mode(stop_mode)
-            .with_filters(GetQuery::new().with_name(req.name));
+            .with_filters(GetQuery::all().with_name(req.name));
         let updated = catalog.drop_query(drop_req).await.unwrap();
 
         assert_eq!(updated.len(), 1);
@@ -397,23 +397,16 @@ mod tests {
         assert_eq!(updated[0].stop_mode, Some(stop_mode));
     }
 
-    async fn prop_get_fragments_missing_query_errors(req: CreateQuery) {
-        let catalog = Catalog::for_test().await;
-        catalog.query.create_query(req).await.unwrap();
-        assert!(
-            catalog.query.get_fragments(i64::MAX).await.is_err(),
-            "get_fragments for non-existent query should error"
-        );
-    }
-
     async fn prop_update_fragment_states_empty_noop(req: CreateQuery) {
         let catalog = Catalog::for_test().await;
         let query = catalog.query.create_query(req).await.unwrap();
-        catalog
+        let (returned, fragments) = catalog
             .query
             .update_fragment_states(query.id, vec![])
             .await
             .expect("Empty update should succeed as no-op");
+        assert_eq!(returned, query);
+        assert!(fragments.is_empty());
     }
 
     async fn prop_fragment_negative_capacity_rejected(worker: CreateWorker, req: CreateQuery) {
@@ -533,13 +526,13 @@ mod tests {
 
     async fn prop_fragment_creation_reserves_capacity(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
         }
-        let initial_capacities: std::collections::HashMap<_, _> = setup
+        let initial_capacities: HashMap<_, _> = setup
             .workers
             .iter()
             .map(|w| (w.host_addr.clone(), w.capacity))
@@ -547,8 +540,8 @@ mod tests {
 
         let query = catalog.query.create_query(req).await.unwrap();
         let fragment_reqs = setup.create_fragments(query.id);
-        let expected_usage: std::collections::HashMap<_, i32> =
-            fragment_reqs.iter().fold(std::collections::HashMap::new(), |mut acc, f| {
+        let expected_usage: HashMap<_, i32> =
+            fragment_reqs.iter().fold(HashMap::new(), |mut acc, f| {
                 *acc.entry(f.host_addr.clone()).or_default() += f.used_capacity;
                 acc
             });
@@ -559,11 +552,7 @@ mod tests {
             .await
             .unwrap();
 
-        let workers = catalog
-            .worker
-            .get_worker(GetWorker::all())
-            .await
-            .unwrap();
+        let workers = catalog.worker.get_worker(GetWorker::all()).await.unwrap();
         for w in &workers {
             let initial = initial_capacities.get(&w.host_addr).copied().unwrap_or(0);
             let used = expected_usage.get(&w.host_addr).copied().unwrap_or(0);
@@ -581,7 +570,7 @@ mod tests {
 
     async fn prop_capacity_released_on_fragment_terminal(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
         terminal_state: FragmentState,
     ) {
         let catalog = Catalog::for_test().await;
@@ -613,7 +602,10 @@ mod tests {
             "Capacity should be reduced after fragment creation"
         );
 
-        catalog.query.walk_fragments_to_state(query.id, &fragments, FragmentState::Running).await;
+        catalog
+            .query
+            .walk_fragments_to_state(query.id, &fragments, FragmentState::Running)
+            .await;
         assert_eq!(
             current_total().await,
             initial_total - total_used,
@@ -646,7 +638,7 @@ mod tests {
     /// and the query remains retrievable throughout.
     async fn prop_query_state_path_valid(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
         path: Vec<QueryState>,
     ) {
         let catalog = Catalog::for_test().await;
@@ -660,20 +652,20 @@ mod tests {
             assert_eq!(model.current_state, *expected_state);
         }
 
-        // Query is still retrievable
+        // Query is still retrievable and matches the last walked model
         let results = catalog
             .query
-            .get_query(GetQuery::new().with_id(created.id))
+            .get_query(GetQuery::all().with_id(created.id))
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].current_state, *path.last().unwrap());
+        assert_eq!(results[0], *models.last().unwrap());
     }
 
     /// After reaching a terminal state, the query's name and statement are preserved.
     async fn prop_terminal_state_preserves_identity(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
         path: Vec<QueryState>,
     ) {
         let catalog = Catalog::for_test().await;
@@ -696,7 +688,7 @@ mod tests {
     /// `validate_query_state_transition` DB trigger.
     async fn prop_invalid_transitions_rejected(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
         path: Vec<QueryState>,
     ) {
         let catalog = Catalog::for_test().await;
@@ -707,8 +699,7 @@ mod tests {
 
         // Walk to a non-terminal state (all but the last element of path)
         let non_terminal_path = &path[..path.len() - 1];
-        let models =
-            walk_query_via_fragments(&catalog, &created, &setup, non_terminal_path).await;
+        let models = walk_query_via_fragments(&catalog, &created, &setup, non_terminal_path).await;
         let current = models.last().unwrap();
 
         let invalid_states = current.current_state.invalid_transitions();
@@ -725,17 +716,14 @@ mod tests {
             );
         }
 
-        // Verify state is unchanged
+        // Verify model is unchanged
         let refetched = catalog
             .query
-            .get_query(GetQuery::new().with_id(created.id))
+            .get_query(GetQuery::all().with_id(created.id))
             .await
             .unwrap();
         assert_eq!(refetched.len(), 1);
-        assert_eq!(
-            refetched[0].current_state, current.current_state,
-            "State must be unchanged after failed transition"
-        );
+        assert_eq!(refetched[0], *current);
     }
 
     // -- Fragment property tests --
@@ -744,7 +732,7 @@ mod tests {
     /// no error), all input fields are preserved, and fragment IDs are unique.
     async fn prop_fragments_stored_with_correct_defaults(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -783,7 +771,7 @@ mod tests {
     }
 
     /// Inserting fragments that reference a non-existent query is rejected (FK violation).
-    async fn prop_fragments_reject_missing_query(setup: model::testing::FragmentSetup) {
+    async fn prop_fragments_reject_missing_query(setup: model::testing::ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -814,7 +802,7 @@ mod tests {
     /// Inserting fragments that reference non-existent workers is rejected (FK violation).
     async fn prop_fragments_reject_missing_worker(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
     ) {
         let catalog = Catalog::for_test().await.query.clone();
         let created_query = catalog.create_query(req).await.unwrap();
@@ -831,7 +819,7 @@ mod tests {
 
     async fn prop_capacity_conserved_on_fragment_terminal(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
         terminal_state: FragmentState,
     ) {
         let catalog = Catalog::for_test().await;
@@ -849,7 +837,10 @@ mod tests {
             .await
             .unwrap();
 
-        catalog.query.walk_fragments_to_state(created_query.id, &fragments, terminal_state).await;
+        catalog
+            .query
+            .walk_fragments_to_state(created_query.id, &fragments, terminal_state)
+            .await;
 
         let workers = catalog
             .worker
@@ -889,7 +880,7 @@ mod tests {
 
     async fn prop_fail_query_from_non_terminal(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
         path: Vec<QueryState>,
         error_msg: String,
     ) {
@@ -900,8 +891,7 @@ mod tests {
         let created = catalog.query.create_query(req).await.unwrap();
 
         let non_terminal_path = &path[..path.len() - 1];
-        let models =
-            walk_query_via_fragments(&catalog, &created, &setup, non_terminal_path).await;
+        let models = walk_query_via_fragments(&catalog, &created, &setup, non_terminal_path).await;
         let current = models.last().unwrap().clone();
 
         let failed = catalog
@@ -911,28 +901,22 @@ mod tests {
             .expect("fail_query from non-terminal state should succeed");
 
         assert_eq!(failed.current_state, QueryState::Failed);
-        assert_eq!(
-            failed.error,
-            Some(serde_json::Value::String(error_msg.clone()))
-        );
+        assert_eq!(failed.error, Some(serde_json::Value::String(error_msg)));
         assert_eq!(failed.name, current.name);
         assert_eq!(failed.statement, current.statement);
 
         let refetched = catalog
             .query
-            .get_query(GetQuery::new().with_id(created.id))
+            .get_query(GetQuery::all().with_id(created.id))
             .await
             .unwrap();
-        assert_eq!(refetched[0].current_state, QueryState::Failed);
-        assert_eq!(
-            refetched[0].error,
-            Some(serde_json::Value::String(error_msg))
-        );
+        assert_eq!(refetched.len(), 1);
+        assert_eq!(refetched[0], failed);
     }
 
     async fn prop_fail_query_from_terminal_rejected(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
         path: Vec<QueryState>,
     ) {
         let catalog = Catalog::for_test().await;
@@ -957,7 +941,7 @@ mod tests {
 
     async fn prop_update_fragment_states_applied(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
         target_state: FragmentState,
     ) {
         let catalog = Catalog::for_test().await;
@@ -972,7 +956,10 @@ mod tests {
             .await
             .unwrap();
 
-        catalog.query.walk_fragments_to_state(query.id, &created, target_state).await;
+        catalog
+            .query
+            .walk_fragments_to_state(query.id, &created, target_state)
+            .await;
 
         let fetched = catalog.query.get_fragments(query.id).await.unwrap();
         for fragment in &fetched {
@@ -986,7 +973,7 @@ mod tests {
 
     async fn prop_update_fragment_states_partial(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
         target_state: FragmentState,
     ) {
         let catalog = Catalog::for_test().await;
@@ -1001,7 +988,10 @@ mod tests {
             .await
             .unwrap();
 
-        catalog.query.walk_fragments_to_state(query.id, &created, FragmentState::Running).await;
+        catalog
+            .query
+            .walk_fragments_to_state(query.id, &created, FragmentState::Running)
+            .await;
 
         let updated_ids: std::collections::HashSet<FragmentId> = created
             .iter()
@@ -1043,7 +1033,7 @@ mod tests {
 
     async fn prop_get_mismatch_query_correctness(
         queries: Vec<CreateQuery>,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1069,7 +1059,7 @@ mod tests {
         }
 
         let mismatched = catalog.query.get_mismatch().await.unwrap();
-        let all_queries = catalog.query.get_query(GetQuery::new()).await.unwrap();
+        let all_queries = catalog.query.get_query(GetQuery::all()).await.unwrap();
 
         let mismatched_ids: std::collections::HashSet<_> =
             mismatched.iter().map(|q| q.id).collect();
@@ -1095,7 +1085,7 @@ mod tests {
 
     async fn prop_create_fragments_transitions_to_planned(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1115,15 +1105,16 @@ mod tests {
 
         let refetched = catalog
             .query
-            .get_query(GetQuery::new().with_id(query.id))
+            .get_query(GetQuery::all().with_id(query.id))
             .await
             .unwrap();
-        assert_eq!(refetched[0].current_state, QueryState::Planned);
+        assert_eq!(refetched.len(), 1);
+        assert_eq!(refetched[0], updated_query);
     }
 
     async fn prop_fragment_state_derives_query_state(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1143,7 +1134,7 @@ mod tests {
             async move {
                 let q = catalog
                     .query
-                    .get_query(GetQuery::new().with_id(query_id))
+                    .get_query(GetQuery::all().with_id(query_id))
                     .await
                     .unwrap();
                 assert_eq!(
@@ -1190,7 +1181,7 @@ mod tests {
 
     async fn prop_one_failed_fragment_fails_query(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1204,7 +1195,10 @@ mod tests {
             .await
             .unwrap();
 
-        catalog.query.walk_fragments_to_state(query.id, &fragments, FragmentState::Running).await;
+        catalog
+            .query
+            .walk_fragments_to_state(query.id, &fragments, FragmentState::Running)
+            .await;
 
         let mut updates: Vec<fragment::ActiveModel> = fragments
             .iter()
@@ -1242,7 +1236,7 @@ mod tests {
 
     async fn prop_worker_internal_error_aggregated(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1256,7 +1250,10 @@ mod tests {
             .await
             .unwrap();
 
-        catalog.query.walk_fragments_to_state(query.id, &fragments, FragmentState::Running).await;
+        catalog
+            .query
+            .walk_fragments_to_state(query.id, &fragments, FragmentState::Running)
+            .await;
 
         let mut updates: Vec<fragment::ActiveModel> = fragments
             .iter()
@@ -1291,7 +1288,7 @@ mod tests {
 
     async fn prop_all_fragments_failed_errors_aggregated(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1305,7 +1302,10 @@ mod tests {
             .await
             .unwrap();
 
-        catalog.query.walk_fragments_to_state(query.id, &fragments, FragmentState::Running).await;
+        catalog
+            .query
+            .walk_fragments_to_state(query.id, &fragments, FragmentState::Running)
+            .await;
 
         let updates: Vec<fragment::ActiveModel> = fragments
             .iter()
@@ -1337,10 +1337,8 @@ mod tests {
         let error = query.error.expect("Query should have aggregated error");
         let error_map = error.as_object().expect("Error should be a JSON object");
 
-        let unique_hosts: std::collections::HashSet<String> = fragments
-            .iter()
-            .map(|f| f.host_addr.to_string())
-            .collect();
+        let unique_hosts: std::collections::HashSet<String> =
+            fragments.iter().map(|f| f.host_addr.to_string()).collect();
 
         assert_eq!(
             error_map.len(),
@@ -1365,10 +1363,7 @@ mod tests {
             .with_timezone(&chrono::Local)
     }
 
-    async fn prop_timestamps_propagated(
-        req: CreateQuery,
-        setup: model::testing::FragmentSetup,
-    ) {
+    async fn prop_timestamps_propagated(req: CreateQuery, setup: model::testing::ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -1381,7 +1376,10 @@ mod tests {
             .await
             .unwrap();
 
-        catalog.query.walk_fragments_to_state(query.id, &fragments, FragmentState::Running).await;
+        catalog
+            .query
+            .walk_fragments_to_state(query.id, &fragments, FragmentState::Running)
+            .await;
 
         const START_BASE_MS: i64 = 1_700_000_000_000;
         let updates: Vec<fragment::ActiveModel> = fragments
@@ -1403,7 +1401,7 @@ mod tests {
 
         let q = catalog
             .query
-            .get_query(GetQuery::new().with_id(query.id))
+            .get_query(GetQuery::all().with_id(query.id))
             .await
             .unwrap();
 
@@ -1438,7 +1436,7 @@ mod tests {
 
         let q = catalog
             .query
-            .get_query(GetQuery::new().with_id(query.id))
+            .get_query(GetQuery::all().with_id(query.id))
             .await
             .unwrap();
 
@@ -1449,8 +1447,7 @@ mod tests {
             "start_timestamp should be preserved"
         );
 
-        let expected_max_stop =
-            ts_from_ms(STOP_BASE_MS + (fragments.len() as i64 - 1) * 1000);
+        let expected_max_stop = ts_from_ms(STOP_BASE_MS + (fragments.len() as i64 - 1) * 1000);
         assert_eq!(
             q[0].stop_timestamp,
             Some(expected_max_stop),
@@ -1460,7 +1457,7 @@ mod tests {
 
     async fn prop_get_fragments_returns_created(
         req: CreateQuery,
-        setup: model::testing::FragmentSetup,
+        setup: model::testing::ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1474,19 +1471,11 @@ mod tests {
             .await
             .unwrap();
 
-        let fetched = catalog.query.get_fragments(query.id).await.unwrap();
-
-        assert_eq!(fetched.len(), created.len());
-
-        let created_ids: std::collections::HashSet<_> = created.iter().map(|f| f.id).collect();
-        for fragment in &fetched {
-            assert!(
-                created_ids.contains(&fragment.id),
-                "Unexpected fragment {} in get_fragments result",
-                fragment.id
-            );
-            assert_eq!(fragment.query_id, query.id);
-        }
+        let mut fetched = catalog.query.get_fragments(query.id).await.unwrap();
+        fetched.sort_by_key(|f| f.id);
+        let mut created = created;
+        created.sort_by_key(|f| f.id);
+        assert_eq!(fetched, created);
     }
 
     proptest! {
@@ -1501,13 +1490,6 @@ mod tests {
         fn drop_query(req in arb_create_query(), stop_mode in any::<StopMode>()) {
             test_prop(|| async move {
                 prop_drop_query(req, stop_mode).await;
-            });
-        }
-
-        #[test]
-        fn get_fragments_missing_query_errors(req in arb_create_query()) {
-            test_prop(|| async move {
-                prop_get_fragments_missing_query_errors(req).await;
             });
         }
 

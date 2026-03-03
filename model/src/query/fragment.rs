@@ -1,5 +1,3 @@
-use crate::query::QueryName;
-use crate::query::query_state::QueryState;
 use crate::worker::endpoint::{GrpcAddr, HostAddr};
 use sea_orm::entity::prelude::*;
 use sea_orm::{FromJsonQueryResult, NotSet, Set};
@@ -138,24 +136,24 @@ impl FragmentState {
             Self::Registered => Some(Self::Started),
             Self::Started => Some(Self::Running),
             Self::Running => Some(Self::Completed),
-            Self::Completed => None,
-            Self::Stopped => None,
-            Self::Failed => None,
+            Self::Completed | Self::Stopped | Self::Failed => None,
         }
     }
 }
 
 /// Conversion from gRPC worker response integers.
 /// Workers only return Registered(0), Started(1), Running(2), Stopped(3), Failed(4).
-impl From<i32> for FragmentState {
-    fn from(value: i32) -> Self {
+impl TryFrom<i32> for FragmentState {
+    type Error = i32;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
-            0 => FragmentState::Registered,
-            1 => FragmentState::Started,
-            2 => FragmentState::Running,
-            3 => FragmentState::Stopped,
-            4 => FragmentState::Failed,
-            _ => panic!("Tag {value} cannot be converted"),
+            0 => Ok(FragmentState::Registered),
+            1 => Ok(FragmentState::Started),
+            2 => Ok(FragmentState::Running),
+            3 => Ok(FragmentState::Stopped),
+            4 => Ok(FragmentState::Failed),
+            other => Err(other),
         }
     }
 }

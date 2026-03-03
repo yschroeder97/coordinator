@@ -80,7 +80,7 @@ impl RequestHandler {
                 recv_result = self.receiver.recv_async() => match recv_result {
                     Ok(req) => self.handle_recv(req).await,
                     Err(_) => {
-                        info!("All clients have been dropped");
+                        info!("All clients have been dropped, shutting down...");
                         return;
                     }
                 },
@@ -113,7 +113,7 @@ impl RequestHandler {
         let Ok(queries) = self
             .catalog
             .query
-            .get_query(GetQuery::new().with_ids(all_ids))
+            .get_query(GetQuery::all().with_ids(all_ids))
             .await
         else {
             return;
@@ -311,7 +311,7 @@ mod tests {
         let queries = handle
             .catalog
             .query
-            .get_query(GetQuery::new())
+            .get_query(GetQuery::all())
             .await
             .unwrap();
         let query = queries.into_iter().next().unwrap();
@@ -357,7 +357,7 @@ mod tests {
             handle.advance_to(id, QueryState::Running).await;
         }
 
-        let drop = DropQuery::new().stop_mode(stop_mode).blocking();
+        let drop = DropQuery::all().stop_mode(stop_mode).blocking();
         let drop_rx = handle.send(drop).await;
         tokio::task::yield_now().await;
 

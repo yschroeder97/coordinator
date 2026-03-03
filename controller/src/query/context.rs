@@ -12,7 +12,7 @@ use model::query::StopMode;
 use model::query::fragment::{self, FragmentError, FragmentId, FragmentState};
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 pub struct QueryContext {
     pub query: query::Model,
@@ -157,24 +157,34 @@ impl QueryContext {
     }
 
     pub(crate) async fn rollback_stop(&self, mode: StopMode, fragments: &[fragment::Model]) {
-        for e in self
+        let errors: Vec<_> = self
             .stop_fragments(mode, fragments)
             .await
             .into_iter()
             .filter_map(Result::err)
-        {
-            error!("Failed to stop fragment: {e}");
+            .collect();
+        if errors.is_empty() {
+            info!("All fragments stopped");
+        } else {
+            for e in errors {
+                error!("Failed to stop fragment: {e}");
+            }
         }
     }
 
     pub(crate) async fn rollback_unregister(&self, fragments: &[fragment::Model]) {
-        for e in self
+        let errors: Vec<_> = self
             .unregister_fragments(fragments)
             .await
             .into_iter()
             .filter_map(Result::err)
-        {
-            error!("Failed to unregister fragment: {e}");
+            .collect();
+        if errors.is_empty() {
+            info!("All fragments unregistered");
+        } else {
+            for e in errors {
+                error!("Failed to unregister fragment: {e}");
+            }
         }
     }
 

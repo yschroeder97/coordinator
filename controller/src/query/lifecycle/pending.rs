@@ -1,18 +1,16 @@
 use crate::query::context::QueryContext;
 use crate::query::lifecycle::planned::Planned;
 use crate::query::reconciler::Transition;
-use model::query::fragment::CreateFragment;
 use model::query::StopMode;
-use tracing::info;
+use model::query::query_state::QueryState;
 
 pub struct Pending;
 
 impl Transition for Pending {
     type Next = Planned;
+    const STATE: QueryState = QueryState::Pending;
 
     async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Planned> {
-        info!("Planning");
-
         #[cfg(feature = "testing")]
         let requests = {
             use model::worker::GetWorker;
@@ -20,7 +18,7 @@ impl Transition for Pending {
             model::testing::arb_create_fragments(&ctx.query, &workers)
         };
         #[cfg(not(feature = "testing"))]
-        let requests: Vec<CreateFragment> = Vec::new();
+        let requests: Vec<model::query::fragment::CreateFragment> = Vec::new();
 
         let (query, fragments) = ctx
             .catalog

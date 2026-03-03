@@ -67,7 +67,7 @@ mod tests {
 
         let sinks = catalog
             .sink
-            .get_sink(GetSink::new().by_name(req.sink.name.clone()))
+            .get_sink(GetSink::all().by_name(req.sink.name.clone()))
             .await
             .expect("Get sink should succeed");
 
@@ -84,7 +84,7 @@ mod tests {
 
         let dropped = catalog
             .sink
-            .drop_sink(DropSink::new().with_name(req.sink.name.clone()))
+            .drop_sink(DropSink::all().with_name(req.sink.name.clone()))
             .await
             .expect("Drop should succeed");
 
@@ -93,7 +93,7 @@ mod tests {
 
         let sinks = catalog
             .sink
-            .get_sink(GetSink::new().by_name(req.sink.name.clone()))
+            .get_sink(GetSink::all().by_name(req.sink.name.clone()))
             .await
             .unwrap();
         assert!(sinks.is_empty(), "Sink should be deleted");
@@ -159,7 +159,7 @@ mod tests {
             .await
             .expect("First sink creation should succeed");
 
-        let drop_req = DropSink::new().with_name(req.sink.name.clone());
+        let drop_req = DropSink::all().with_name(req.sink.name.clone());
         catalog
             .sink
             .drop_sink(drop_req)

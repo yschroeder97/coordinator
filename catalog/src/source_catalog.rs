@@ -162,7 +162,7 @@ mod tests {
         let rsp = catalog
             .source
             .get_physical_source(
-                GetPhysicalSource::new().with_logical_source(req.logical.name.clone()),
+                GetPhysicalSource::all().with_logical_source(req.logical.name.clone()),
             )
             .await
             .unwrap();
@@ -286,7 +286,7 @@ mod tests {
             .await
             .unwrap();
 
-        let drop_req = DropPhysicalSource::new().with_filters(GetPhysicalSource::new().with_id(created.id));
+        let drop_req = DropPhysicalSource::all().with_filters(GetPhysicalSource::all().with_id(created.id));
         let dropped = catalog
             .source
             .drop_physical_source(drop_req)
@@ -300,7 +300,7 @@ mod tests {
 
         let remaining = catalog
             .source
-            .get_physical_source(GetPhysicalSource::new().with_id(created.id))
+            .get_physical_source(GetPhysicalSource::all().with_id(created.id))
             .await
             .unwrap();
         assert!(
@@ -327,8 +327,8 @@ mod tests {
             .await
             .unwrap();
 
-        let drop_req = DropPhysicalSource::new()
-            .with_filters(GetPhysicalSource::new().with_logical_source(req.logical.name.clone()));
+        let drop_req = DropPhysicalSource::all()
+            .with_filters(GetPhysicalSource::all().with_logical_source(req.logical.name.clone()));
         let dropped = catalog
             .source
             .drop_physical_source(drop_req)
@@ -341,7 +341,7 @@ mod tests {
         let remaining = catalog
             .source
             .get_physical_source(
-                GetPhysicalSource::new().with_logical_source(req.logical.name.clone()),
+                GetPhysicalSource::all().with_logical_source(req.logical.name.clone()),
             )
             .await
             .unwrap();
@@ -370,7 +370,7 @@ mod tests {
             .await
             .unwrap();
 
-        let drop_req = DropPhysicalSource::new().with_filters(GetPhysicalSource::new().with_id(999999));
+        let drop_req = DropPhysicalSource::all().with_filters(GetPhysicalSource::all().with_id(999999));
         let dropped = catalog
             .source
             .drop_physical_source(drop_req)
@@ -380,7 +380,7 @@ mod tests {
 
         let remaining = catalog
             .source
-            .get_physical_source(GetPhysicalSource::new().with_host_addr(req.worker.host_addr))
+            .get_physical_source(GetPhysicalSource::all().with_host_addr(req.worker.host_addr))
             .await
             .unwrap();
         assert_eq!(
@@ -408,7 +408,7 @@ mod tests {
             .await
             .unwrap();
 
-        let drop_req = DropPhysicalSource::new().with_filters(GetPhysicalSource::new().with_id(first.id));
+        let drop_req = DropPhysicalSource::all().with_filters(GetPhysicalSource::all().with_id(first.id));
         catalog
             .source
             .drop_physical_source(drop_req)

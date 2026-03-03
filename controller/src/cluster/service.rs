@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-const CLUSTER_SERVICE_POLLING_DURATION: tokio::time::Duration = tokio::time::Duration::from_secs(5);
+pub const CLUSTER_SERVICE_POLLING_DURATION: tokio::time::Duration = tokio::time::Duration::from_secs(5);
 
 enum WorkerStateInternal {
     Connecting {
@@ -18,6 +18,7 @@ enum WorkerStateInternal {
         handle: AbortHandle,
     },
     Active {
+        #[allow(dead_code)]
         model: worker::Model,
     },
 }

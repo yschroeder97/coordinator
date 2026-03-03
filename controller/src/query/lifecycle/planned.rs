@@ -3,7 +3,7 @@ use crate::query::lifecycle::registered::Registered;
 use crate::query::reconciler::Transition;
 use model::query::StopMode;
 use model::query::fragment;
-use tracing::info;
+use model::query::query_state::QueryState;
 
 pub struct Planned {
     pub fragments: Vec<fragment::Model>,
@@ -11,9 +11,9 @@ pub struct Planned {
 
 impl Transition for Planned {
     type Next = Registered;
+    const STATE: QueryState = QueryState::Planned;
 
     async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Registered> {
-        info!("Registering fragments");
         let results = ctx.register_fragments(&self.fragments).await;
         Ok(Registered {
             fragments: ctx.apply_rpc_results(&self.fragments, results).await?,

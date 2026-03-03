@@ -1,6 +1,6 @@
 #[cfg(feature = "testing")]
 use proptest_derive::Arbitrary;
-use sea_orm::{DeriveEntityModel, FromJsonQueryResult};
+use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 

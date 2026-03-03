@@ -20,8 +20,9 @@ pub(crate) enum WorkerError {
 impl WorkerError {
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::ClientUnavailable(_) => true,
-            Self::ClientError(WorkerClientErr::Connection(..)) => true,
+            Self::ClientUnavailable(_) | Self::ClientError(WorkerClientErr::Connection(..)) => {
+                true
+            }
             Self::ClientError(WorkerClientErr::Communication { status, .. }) => matches!(
                 status.code(),
                 tonic::Code::Unavailable

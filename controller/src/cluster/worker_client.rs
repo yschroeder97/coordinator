@@ -37,8 +37,8 @@ pub(crate) enum WorkerClientErr {
 impl WorkerClientErr {
     pub fn addr(&self) -> &GrpcAddr {
         match self {
-            WorkerClientErr::Connection(_, addr) => addr,
-            WorkerClientErr::Communication { addr, .. } => addr,
+            WorkerClientErr::Connection(_, addr)
+            | WorkerClientErr::Communication { addr, .. } => addr,
         }
     }
 
@@ -72,7 +72,7 @@ pub(crate) struct WorkerClient {
 
 impl WorkerClient {
     const RPC_TIMEOUT: Duration = Duration::from_secs(5);
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
     const ENDPOINT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
     const ENDPOINT_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -121,17 +121,11 @@ impl WorkerClient {
                 let span = tracing::Span::current();
                 tokio::spawn(
                     async move {
-                        let res =
-                            tokio::time::timeout(Self::RPC_TIMEOUT, $client.$method($req)).await;
-                        let res = match res {
-                            Ok(r) => r
-                                .map(|resp| resp.into_inner())
-                                .map_err(|status| WorkerClientErr::grpc_error(addr, status)),
-                            Err(_) => Err(WorkerClientErr::grpc_error(
-                                addr,
-                                tonic::Status::deadline_exceeded("RPC timeout"),
-                            )),
-                        };
+                        let res = $client
+                            .$method($req)
+                            .await
+                            .map(|resp| resp.into_inner())
+                            .map_err(|status| WorkerClientErr::grpc_error(addr, status));
                         reply_to($tx, res);
                     }
                     .instrument(span),
@@ -214,13 +208,13 @@ impl WorkerClient {
     }
 }
 
-fn connect_retry_strategy() -> impl Iterator<Item = Duration> {
-    const INITIAL_BACKOFF_MS: u64 = 100;
-    const MAX_RETRIES: usize = 8;
+pub const CONNECT_INITIAL_BACKOFF_MS: u64 = 100;
+pub const CONNECT_MAX_RETRIES: usize = 8;
 
-    ExponentialBackoff::from_millis(INITIAL_BACKOFF_MS)
+fn connect_retry_strategy() -> impl Iterator<Item = Duration> {
+    ExponentialBackoff::from_millis(CONNECT_INITIAL_BACKOFF_MS)
         .map(jitter)
-        .take(MAX_RETRIES)
+        .take(CONNECT_MAX_RETRIES)
 }
 
 fn reply_to<R, E>(tx: tokio::sync::oneshot::Sender<Result<R, WorkerClientErr>>, res: Result<R, E>)

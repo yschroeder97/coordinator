@@ -15,7 +15,7 @@ use uuid::Uuid;
 pub type QueryName = String;
 pub type QueryId = i64;
 
-#[derive(Debug, Clone, DeriveEntityModel)]
+#[derive(Debug, Clone, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "query")]
 pub struct Model {
     #[sea_orm(primary_key)]
@@ -140,7 +140,7 @@ pub struct DropQuery {
 }
 
 impl DropQuery {
-    pub fn new() -> Self {
+    pub fn all() -> Self {
         Self::default()
     }
 
@@ -173,7 +173,7 @@ pub struct GetQuery {
 }
 
 impl GetQuery {
-    pub fn new() -> Self {
+    pub fn all() -> Self {
         Self::default()
     }
 

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use tracing::{Instrument, debug, info, info_span, warn};
+use tracing::{debug, info, warn};
 
 const QUERY_SERVICE_POLLING_DURATION: Duration = Duration::from_secs(10);
 
@@ -83,20 +83,13 @@ impl QueryService {
         let query_id = mismatch.id;
         info!(query_id, name = %mismatch.name, "Spawning reconciliation task");
 
-        let span = info_span!(
-            "query",
-            id = mismatch.id,
-            name = %mismatch.name,
-            statement = %mismatch.statement,
-        );
-
         let ctx = QueryContext {
             query: mismatch,
             catalog: self.catalog.clone(),
             worker_registry: self.worker_registry.clone(),
         };
 
-        let handle = tokio::spawn(QueryReconciler::run(ctx, stop_rx).instrument(span));
+        let handle = tokio::spawn(QueryReconciler::run(ctx, stop_rx));
         self.tasks.insert(query_id, (stop_tx, handle));
     }
 

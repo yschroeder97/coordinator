@@ -71,7 +71,7 @@ pub struct GetSink {
 }
 
 impl GetSink {
-    pub fn new() -> Self {
+    pub fn all() -> Self {
         Self::default()
     }
 
@@ -108,7 +108,7 @@ pub struct DropSink {
 }
 
 impl DropSink {
-    pub fn new() -> Self {
+    pub fn all() -> Self {
         Self::default()
     }
 

@@ -26,8 +26,7 @@ impl MigrationTrait for Migration {
         );
 
         match manager.get_database_backend() {
-            DbBackend::MySql => {}
-            DbBackend::Postgres => {}
+            DbBackend::MySql | DbBackend::Postgres => {}
             DbBackend::Sqlite => {
                 manager
                     .get_connection()
@@ -41,7 +40,6 @@ impl MigrationTrait for Migration {
                     .await
                     .expect("failed to set journal mode");
             }
-            _ => {}
         }
 
         manager
@@ -366,6 +364,7 @@ enum Sink {
     Table,
     Name,
     HostAddr,
+    #[allow(clippy::enum_variant_names)]
     SinkType,
     Schema,
     Config,
