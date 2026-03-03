@@ -94,9 +94,10 @@ mod tests {
     use crate::Catalog;
     use crate::testing::test_prop;
     use model::source::physical_source::DropPhysicalSource;
+    use model::source::logical_source::CreateLogicalSource;
     use model::testing::{PhysicalSourceWithRefs, arb_create_worker, arb_physical_with_refs};
-    use model::testing::arb_create_logical_source;
     use model::worker::CreateWorker;
+    use proptest::prelude::*;
     use proptest::proptest;
 
     async fn prop_get_logical_source(create_source: CreateLogicalSource) {
@@ -449,7 +450,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn get_logical_source(create_source in arb_create_logical_source()) {
+        fn get_logical_source(create_source in any::<CreateLogicalSource>()) {
             test_prop(|| async move {
                 prop_get_logical_source(create_source).await;
             });

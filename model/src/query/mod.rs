@@ -3,6 +3,8 @@ pub mod query_state;
 
 use crate::IntoCondition;
 #[cfg(feature = "testing")]
+use proptest::prelude::Just;
+#[cfg(feature = "testing")]
 use proptest_derive::Arbitrary;
 use query_state::{DesiredQueryState, QueryState};
 use sea_orm::ActiveValue::{NotSet, Set};
@@ -44,7 +46,6 @@ impl Related<fragment::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
-
 
 #[cfg_attr(feature = "testing", derive(Arbitrary))]
 #[derive(
@@ -210,5 +211,22 @@ impl IntoCondition for GetQuery {
             .add_option(self.name.map(|v| Column::Name.eq(v)))
             .add_option(self.current_state.map(|v| Column::CurrentState.eq(v)))
             .add_option(self.desired_state.map(|v| Column::DesiredState.eq(v)))
+    }
+}
+
+#[cfg(feature = "testing")]
+proptest::prop_compose! {
+    pub fn arb_create_query()(
+        name in proptest::string::string_regex("[a-z][a-z0-9_-]{2,29}").unwrap(),
+        statement in proptest::string::string_regex("SELECT [a-z]+ FROM [a-z]+").unwrap(),
+        block_until in proptest::prop_oneof![
+            Just(QueryState::Pending),
+            Just(QueryState::Planned),
+            Just(QueryState::Registered),
+            Just(QueryState::Running),
+            Just(QueryState::Completed),
+        ],
+    ) -> CreateQuery {
+        CreateQuery::new(statement).name(name).block_until(block_until)
     }
 }

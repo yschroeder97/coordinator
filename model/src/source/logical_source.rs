@@ -1,6 +1,4 @@
 use crate::source::schema::Schema;
-#[cfg(feature = "testing")]
-use proptest_derive::Arbitrary;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 
@@ -29,9 +27,13 @@ impl Related<super::physical_source::Entity> for Entity {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-#[cfg_attr(feature = "testing", derive(Arbitrary))]
+#[cfg_attr(feature = "testing", derive(proptest_derive::Arbitrary))]
 #[derive(Clone, Debug)]
 pub struct CreateLogicalSource {
+    #[cfg_attr(
+        feature = "testing",
+        proptest(regex = "[a-z][a-z0-9_]{2,29}")
+    )]
     pub name: LogicalSourceName,
     pub schema: Schema,
 }

@@ -1,6 +1,4 @@
 use http::Uri;
-#[cfg(feature = "testing")]
-use proptest_derive::Arbitrary;
 use std::fmt;
 use std::str::FromStr;
 
@@ -11,34 +9,32 @@ pub type GrpcAddr = NetworkAddr;
 pub const DEFAULT_GRPC_PORT: u16 = 8080;
 pub const DEFAULT_DATA_PORT: u16 = 9090;
 
-#[cfg(feature = "testing")]
-use proptest::prelude::Strategy;
 use sea_orm::sea_query::{ArrayType, StringLen, ValueTypeErr};
 use sea_orm::{
     ColIdx, ColumnType, DbErr, QueryResult, TryFromU64, TryGetError, TryGetable, Value, sea_query,
 };
 
 #[cfg(feature = "testing")]
-fn arb_host_name() -> impl Strategy<Value = String> {
+fn arb_host_name() -> impl proptest::prelude::Strategy<Value = String> {
     use proptest::prelude::*;
     prop_oneof![
-        // Common localhost
         Just("localhost".to_string()),
         Just("127.0.0.1".to_string()),
-        // IPv4
         (0..255u8, 0..255u8, 0..255u8, 0..255u8)
             .prop_map(|(a, b, c, d)| format!("{}.{}.{}.{}", a, b, c, d)),
-        // Hostname: start with alphanumeric, allow dashes, end with alphanumeric
         proptest::string::string_regex("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?").unwrap()
     ]
 }
 
-#[cfg_attr(feature = "testing", derive(Arbitrary))]
+#[cfg(feature = "testing")]
+pub fn arb_host_addr() -> impl proptest::prelude::Strategy<Value = HostAddr> {
+    use proptest::prelude::*;
+    (arb_host_name(), 1024..65535u16).prop_map(|(host, port)| NetworkAddr::new(host, port))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct NetworkAddr {
-    #[cfg_attr(feature = "testing", proptest(strategy = "arb_host_name()"))]
     pub host: HostName,
-    #[cfg_attr(feature = "testing", proptest(strategy = "1..u16::MAX"))]
     pub port: u16,
 }
 
@@ -60,7 +56,7 @@ impl NetworkAddr {
     }
 }
 
-impl From<NetworkAddr> for sea_orm::Value {
+impl From<NetworkAddr> for Value {
     fn from(val: NetworkAddr) -> Self {
         Value::String(Some(Box::new(val.to_string())))
     }

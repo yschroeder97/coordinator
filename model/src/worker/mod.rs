@@ -193,3 +193,20 @@ impl DropWorker {
         Self { host_addr }
     }
 }
+
+#[cfg(feature = "testing")]
+proptest::prop_compose! {
+    pub fn arb_create_worker()(
+        host_addr in endpoint::arb_host_addr(),
+        grpc_port in 1024..65535u16,
+        capacity in 0..1024i32,
+    ) -> CreateWorker {
+        let grpc_port = if grpc_port == host_addr.port {
+            if grpc_port < 65534 { grpc_port + 1 } else { grpc_port - 1 }
+        } else {
+            grpc_port
+        };
+        let grpc_addr = endpoint::NetworkAddr::new(host_addr.host.clone(), grpc_port);
+        CreateWorker::new(host_addr, grpc_addr, capacity)
+    }
+}
