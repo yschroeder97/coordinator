@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use futures_util::FutureExt;
+use std::panic::AssertUnwindSafe;
+use tracing::{debug, error, info, warn};
 
 const QUERY_SERVICE_POLLING_DURATION: Duration = Duration::from_secs(10);
 
@@ -89,7 +91,14 @@ impl QueryService {
             worker_registry: self.worker_registry.clone(),
         };
 
-        let handle = tokio::spawn(QueryReconciler::run(ctx, stop_rx));
+        let handle = tokio::spawn(async move {
+            if let Err(e) = AssertUnwindSafe(QueryReconciler::run(ctx, stop_rx))
+                .catch_unwind()
+                .await
+            {
+                error!(query_id, "Reconciler panicked: {e:?}");
+            }
+        });
         self.tasks.insert(query_id, (stop_tx, handle));
     }
 

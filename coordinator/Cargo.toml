@@ -5,6 +5,7 @@ edition = "2024"
 
 [features]
 testing = ["catalog/testing", "controller/testing"]
+failpoints = ["controller/failpoints"]
 
 [dependencies]
 catalog.workspace = true
@@ -29,4 +30,5 @@ model = { workspace = true, features = ["testing"] }
 proptest = "1.5"
 serde_json.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+fail = { workspace = true, features = ["failpoints"] }
 futures = "0.3"

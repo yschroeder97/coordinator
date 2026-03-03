@@ -1,6 +1,7 @@
 use crate::query::context::QueryContext;
 use crate::query::lifecycle::running::Running;
 use crate::query::reconciler::Transition;
+use fail::fail_point;
 use model::query::StopMode;
 use model::query::fragment;
 use model::query::query_state::QueryState;
@@ -14,6 +15,7 @@ impl Transition for Registered {
     const STATE: QueryState = QueryState::Registered;
 
     async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Running> {
+        fail_point!("reconciler_pre_start");
         let results = ctx.start_fragments(&self.fragments).await;
         Ok(Running {
             fragments: ctx.apply_rpc_results(&self.fragments, results).await?,

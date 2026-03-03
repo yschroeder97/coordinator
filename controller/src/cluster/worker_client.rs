@@ -72,7 +72,7 @@ pub(crate) struct WorkerClient {
 
 impl WorkerClient {
     const RPC_TIMEOUT: Duration = Duration::from_secs(5);
-    pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    pub const CONNECT_TIMEOUT: Duration = CONNECT_TIMEOUT;
     const ENDPOINT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
     const ENDPOINT_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -208,6 +208,7 @@ impl WorkerClient {
     }
 }
 
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CONNECT_INITIAL_BACKOFF_MS: u64 = 100;
 pub const CONNECT_MAX_RETRIES: usize = 8;
 

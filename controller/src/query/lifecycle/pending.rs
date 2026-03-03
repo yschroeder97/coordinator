@@ -1,6 +1,7 @@
 use crate::query::context::QueryContext;
 use crate::query::lifecycle::planned::Planned;
 use crate::query::reconciler::Transition;
+use fail::fail_point;
 use model::query::StopMode;
 use model::query::query_state::QueryState;
 
@@ -20,6 +21,9 @@ impl Transition for Pending {
         #[cfg(not(feature = "testing"))]
         let requests: Vec<model::query::fragment::CreateFragment> = Vec::new();
 
+        fail_point!("reconciler_create_fragments", |_| Err(anyhow::anyhow!(
+            "injected: reconciler_create_fragments"
+        )));
         let (query, fragments) = ctx
             .catalog
             .query
