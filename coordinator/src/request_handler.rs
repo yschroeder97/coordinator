@@ -40,10 +40,10 @@ macro_rules! dispatch_blocking {
 
 #[derive(Error, Debug)]
 #[error("Query '{query_id}' terminated with state {state} before reaching target state")]
-pub struct EarlyTermination {
-    pub query_id: i64,
-    pub state: QueryState,
-    pub model: query::Model,
+struct EarlyTermination {
+    query_id: i64,
+    state: QueryState,
+    model: query::Model,
 }
 
 struct PendingQueryDrop {
@@ -93,7 +93,6 @@ impl RequestHandler {
 
     #[instrument(skip(self))]
     async fn resolve_pending_queries(&mut self) {
-        // Skip fetching data when no outstanding requests exist
         if self.pending_query_creates.is_empty() && self.pending_query_drops.is_empty() {
             return;
         }

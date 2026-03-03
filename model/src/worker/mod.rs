@@ -2,10 +2,9 @@ pub mod endpoint;
 pub mod network_link;
 
 use endpoint::{GrpcAddr, HostAddr};
-use network_link::Relation::{SourceWorker, TargetWorker};
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, LinkDef, NotSet};
+use sea_orm::{Condition, NotSet};
 use strum::{Display, EnumIter};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Display, EnumIter, DeriveActiveEnum)]
@@ -71,42 +70,6 @@ impl ActiveModelBehavior for ActiveModel {
             )));
         }
         Ok(self)
-    }
-}
-
-/// Linked trait to find outgoing neighbors (workers this worker points to).
-/// Traverses: Worker -> NetworkLink (as source) -> Worker (as target)
-pub struct WorkerToOutgoingNeighbors;
-
-impl Linked for WorkerToOutgoingNeighbors {
-    type FromEntity = Entity;
-    type ToEntity = Entity;
-
-    fn link(&self) -> Vec<LinkDef> {
-        vec![
-            // 1. From Worker, go "backward" into the junction table via SourceWorker
-            SourceWorker.def().rev(),
-            // 2. From the junction table, go "forward" to the target Worker
-            TargetWorker.def(),
-        ]
-    }
-}
-
-/// Linked trait to find incoming neighbors (workers that point to this worker).
-/// Traverses: Worker -> NetworkLink (as target) -> Worker (as source)
-pub struct WorkerToIncomingNeighbors;
-
-impl Linked for WorkerToIncomingNeighbors {
-    type FromEntity = Entity;
-    type ToEntity = Entity;
-
-    fn link(&self) -> Vec<LinkDef> {
-        vec![
-            // 1. From Worker, go "backward" into the junction table via TargetWorker
-            TargetWorker.def().rev(),
-            // 2. From the junction table, go "forward" to the source Worker
-            SourceWorker.def(),
-        ]
     }
 }
 

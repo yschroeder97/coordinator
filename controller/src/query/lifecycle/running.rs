@@ -15,8 +15,8 @@ use tracing::{info, warn};
 
 const QUERY_POLLING_INTERVAL: Duration = Duration::from_secs(5);
 
-pub struct Running {
-    pub fragments: Vec<fragment::Model>,
+pub(crate) struct Running {
+    pub(crate) fragments: Vec<fragment::Model>,
 }
 
 impl From<&ProtoError> for FragmentError {

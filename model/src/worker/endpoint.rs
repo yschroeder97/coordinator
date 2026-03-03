@@ -107,8 +107,6 @@ impl FromStr for NetworkAddr {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // We use Uri to parse because it understands hostnames + ports
-        // We add a dummy scheme so the parser recognizes the authority
         let format_s = if s.contains("://") {
             s.to_string()
         } else {

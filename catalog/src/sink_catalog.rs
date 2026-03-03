@@ -124,13 +124,11 @@ mod tests {
     async fn prop_sink_worker_ref_required(req: SinkWithRefs) {
         let catalog = Catalog::for_test().await;
 
-        // Without worker, sink creation should fail
         assert!(
             catalog.sink.create_sink(req.sink.clone()).await.is_err(),
             "Sink creation without worker should be rejected"
         );
 
-        // After creating worker, sink creation should succeed
         catalog
             .worker
             .create_worker(req.worker)

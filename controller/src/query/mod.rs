@@ -4,6 +4,6 @@ mod reconciler;
 pub(crate) mod retry;
 pub mod service;
 
-pub type QueryId = i64;
+pub(crate) type QueryId = i64;
 
-pub struct Completed;
+pub(crate) struct Completed;

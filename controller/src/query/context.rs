@@ -14,10 +14,10 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
-pub struct QueryContext {
-    pub query: query::Model,
-    pub catalog: Arc<Catalog>,
-    pub worker_registry: WorkerRegistryHandle,
+pub(crate) struct QueryContext {
+    pub(crate) query: query::Model,
+    pub(crate) catalog: Arc<Catalog>,
+    pub(crate) worker_registry: WorkerRegistryHandle,
 }
 
 impl QueryContext {

@@ -253,7 +253,6 @@ mod tests {
             .await
             .expect("Physical source creation should succeed");
 
-        // Property: Cannot drop logical source while physical sources reference it
         let drop_request = DropLogicalSource {
             with_name: req.logical.name.clone(),
         };

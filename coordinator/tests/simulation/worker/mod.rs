@@ -4,12 +4,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use madsim::rand::{Rng, thread_rng};
 use tonic::metadata::MetadataMap;
 use tonic::{Code, Request, Response, Status};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, instrument};
 
 use controller::cluster::worker_client::worker_rpc_service;
 use controller::cluster::health_monitor::health_proto;
 
 use worker_rpc_service::worker_rpc_service_server::WorkerRpcService;
+#[allow(unused_imports)]
 pub use worker_rpc_service::worker_rpc_service_server::WorkerRpcServiceServer;
 use worker_rpc_service::worker_status_response::{ActiveQuery, TerminatedQuery};
 use worker_rpc_service::{
@@ -18,6 +19,7 @@ use worker_rpc_service::{
     WorkerStatusRequest, WorkerStatusResponse,
 };
 
+#[allow(unused_imports)]
 pub use health_proto::health_server::HealthServer;
 
 type FragmentId = u64;
@@ -210,6 +212,7 @@ impl WorkerRpcService for SingleNodeWorker {
         request: Request<QueryLogRequest>,
     ) -> Result<Response<QueryLogReply>, Status> {
         self.maybe_fail()?;
+        let _ = request;
         Ok(Response::new(QueryLogReply { entries: vec![] }))
     }
 

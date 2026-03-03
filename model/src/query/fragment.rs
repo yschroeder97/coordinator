@@ -141,8 +141,6 @@ impl FragmentState {
     }
 }
 
-/// Conversion from gRPC worker response integers.
-/// Workers only return Registered(0), Started(1), Running(2), Stopped(3), Failed(4).
 impl TryFrom<i32> for FragmentState {
     type Error = i32;
 

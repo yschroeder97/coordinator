@@ -19,26 +19,26 @@ use model::source::physical_source::{
 use model::worker::{self, CreateWorker, DropWorker, GetWorker};
 use tracing::{Instrument, info, info_span};
 
-pub type CreateLogicalSourceRequest = Request<CreateLogicalSource, Result<logical_source::Model>>;
-pub type CreatePhysicalSourceRequest =
+pub(crate) type CreateLogicalSourceRequest = Request<CreateLogicalSource, Result<logical_source::Model>>;
+pub(crate) type CreatePhysicalSourceRequest =
     Request<CreatePhysicalSource, Result<physical_source::Model>>;
-pub type CreateSinkRequest = Request<CreateSink, Result<sink::Model>>;
-pub type CreateQueryRequest = Request<CreateQuery, Result<query::Model>>;
-pub type CreateWorkerRequest = Request<CreateWorker, Result<worker::Model>>;
+pub(crate) type CreateSinkRequest = Request<CreateSink, Result<sink::Model>>;
+pub(crate) type CreateQueryRequest = Request<CreateQuery, Result<query::Model>>;
+pub(crate) type CreateWorkerRequest = Request<CreateWorker, Result<worker::Model>>;
 
-pub type DropLogicalSourceRequest =
+pub(crate) type DropLogicalSourceRequest =
     Request<DropLogicalSource, Result<Option<logical_source::Model>>>;
-pub type DropPhysicalSourceRequest =
+pub(crate) type DropPhysicalSourceRequest =
     Request<DropPhysicalSource, Result<Vec<physical_source::Model>>>;
-pub type DropSinkRequest = Request<DropSink, Result<Vec<sink::Model>>>;
-pub type DropQueryRequest = Request<DropQuery, Result<Vec<query::Model>>>;
-pub type DropWorkerRequest = Request<DropWorker, Result<worker::Model>>;
+pub(crate) type DropSinkRequest = Request<DropSink, Result<Vec<sink::Model>>>;
+pub(crate) type DropQueryRequest = Request<DropQuery, Result<Vec<query::Model>>>;
+pub(crate) type DropWorkerRequest = Request<DropWorker, Result<worker::Model>>;
 
-pub type GetLogicalSourceRequest = Request<GetLogicalSource, Result<Option<logical_source::Model>>>;
-pub type GetPhysicalSourceRequest = Request<GetPhysicalSource, Result<Vec<physical_source::Model>>>;
-pub type GetSinkRequest = Request<GetSink, Result<Vec<sink::Model>>>;
-pub type GetQueryRequest = Request<GetQuery, Result<Vec<query::Model>>>;
-pub type GetWorkerRequest = Request<GetWorker, Result<Vec<worker::Model>>>;
+pub(crate) type GetLogicalSourceRequest = Request<GetLogicalSource, Result<Option<logical_source::Model>>>;
+pub(crate) type GetPhysicalSourceRequest = Request<GetPhysicalSource, Result<Vec<physical_source::Model>>>;
+pub(crate) type GetSinkRequest = Request<GetSink, Result<Vec<sink::Model>>>;
+pub(crate) type GetQueryRequest = Request<GetQuery, Result<Vec<query::Model>>>;
+pub(crate) type GetWorkerRequest = Request<GetWorker, Result<Vec<worker::Model>>>;
 
 #[derive(Debug)]
 pub enum CoordinatorRequest {

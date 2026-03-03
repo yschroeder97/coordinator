@@ -82,8 +82,6 @@ impl From<StopMode> for i32 {
 pub struct CreateQuery {
     pub name: QueryName,
     pub sql_statement: String,
-    /// Block the request until the query reaches this state.
-    /// Defaults to `QueryState::default()` (Pending), meaning no blocking.
     pub block_until: QueryState,
 }
 
@@ -135,7 +133,6 @@ impl From<CreateQuery> for ActiveModel {
 #[derive(Clone, Debug, Default)]
 pub struct DropQuery {
     pub stop_mode: StopMode,
-    /// Whether to block until the query is fully stopped/terminated.
     pub should_block: bool,
     pub filters: GetQuery,
 }

@@ -17,10 +17,6 @@ use source_catalog::SourceCatalog;
 use std::sync::Arc;
 use worker_catalog::WorkerCatalog;
 
-/// Facade providing access to all catalog types.
-///
-/// Each catalog manages a specific domain (sources, sinks, workers, queries)
-/// while sharing the same underlying database connection.
 #[derive(Clone)]
 pub struct Catalog {
     pub source: Arc<SourceCatalog>,

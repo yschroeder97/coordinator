@@ -306,7 +306,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Create triggers
         let backend = manager.get_database_backend();
         if backend == DbBackend::MySql {
             return Err(DbErr::Custom(
@@ -321,7 +320,6 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Drop triggers first
         let backend = manager.get_database_backend();
         if let Some(sql) = triggers::down(backend) {
             manager.get_connection().execute_unprepared(sql).await?;

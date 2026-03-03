@@ -19,8 +19,8 @@ use worker_rpc_service::{
     StopQueryRequest, UnregisterQueryRequest,
 };
 
-pub use worker_rpc_service::Error as FragmentError;
-pub use worker_rpc_service::QueryStatusReply;
+pub(crate) use worker_rpc_service::Error as FragmentError;
+pub(crate) use worker_rpc_service::QueryStatusReply;
 
 #[derive(Error, Debug)]
 pub(crate) enum WorkerClientErr {
@@ -35,14 +35,14 @@ pub(crate) enum WorkerClientErr {
 }
 
 impl WorkerClientErr {
-    pub fn addr(&self) -> &GrpcAddr {
+    pub(crate) fn addr(&self) -> &GrpcAddr {
         match self {
             WorkerClientErr::Connection(_, addr)
             | WorkerClientErr::Communication { addr, .. } => addr,
         }
     }
 
-    pub fn grpc_error(addr: GrpcAddr, status: tonic::Status) -> Self {
+    pub(crate) fn grpc_error(addr: GrpcAddr, status: tonic::Status) -> Self {
         WorkerClientErr::Communication { addr, status }
     }
 }
@@ -76,12 +76,12 @@ impl WorkerClient {
     const ENDPOINT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
     const ENDPOINT_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(60);
 
-    pub fn grpc_addr(&self) -> GrpcAddr {
+    pub(crate) fn grpc_addr(&self) -> GrpcAddr {
         self.grpc_addr.clone()
     }
 
     #[instrument(fields(grpc_addr = %grpc_addr))]
-    pub async fn connect(
+    pub(crate) async fn connect(
         grpc_addr: GrpcAddr,
     ) -> Result<(flume::Sender<Rpc>, WorkerClient), WorkerClientErr> {
         debug!("Attempting to connect");
@@ -114,7 +114,7 @@ impl WorkerClient {
     }
 
     #[instrument(fields(grpc_addr = %self.grpc_addr))]
-    pub async fn run(self) {
+    pub(crate) async fn run(self) {
         macro_rules! dispatch {
             ($client:expr, $tx:expr, $method:ident, $req:expr) => {
                 let addr = self.grpc_addr.clone();

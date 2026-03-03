@@ -2,11 +2,10 @@
 use tokio::task::JoinHandle;
 
 #[cfg(not(madsim))]
-pub use tokio::task::JoinSet;
+pub(crate) use tokio::task::JoinSet;
 
-/// A polyfill for JoinSet that works with madsim (using FuturesUnordered)
 #[cfg(madsim)]
-pub struct JoinSet<T> {
+pub(crate) struct JoinSet<T> {
     tasks: futures_util::stream::FuturesUnordered<JoinHandle<T>>,
 }
 
@@ -48,7 +47,7 @@ impl<T> JoinSet<T> {
 
 #[cfg(madsim)]
 #[derive(Debug)]
-pub struct AbortHandle(tokio::task::AbortHandle);
+pub(crate) struct AbortHandle(tokio::task::AbortHandle);
 
 #[cfg(madsim)]
 impl AbortHandle {
@@ -58,4 +57,4 @@ impl AbortHandle {
 }
 
 #[cfg(not(madsim))]
-pub use tokio::task::AbortHandle;
+pub(crate) use tokio::task::AbortHandle;

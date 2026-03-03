@@ -30,16 +30,15 @@ use strum::{Display, EnumString, IntoEnumIterator};
 #[strum(serialize_all = "PascalCase")]
 pub enum QueryState {
     #[default]
-    Pending, // Query was inserted into the catalog
-    Planned,    // Query was successfully planned
-    Registered, // Query was successfully registered on all workers
-    Running,    // Query was successfully started on all workers
-    Completed,  // Query completed successfully
-    Stopped,    // Query was stopped from the outside
-    Failed,     // Query failed
+    Pending,
+    Planned,
+    Registered,
+    Running,
+    Completed,
+    Stopped,
+    Failed,
 }
 
-/// From the clients perspective, we want a query to be either Running or Stopped
 #[cfg_attr(feature = "testing", derive(Arbitrary))]
 #[derive(
     Clone,
@@ -64,34 +63,6 @@ pub enum DesiredQueryState {
     #[default]
     Completed,
     Stopped,
-}
-
-/// Terminal states for a query - used in terminated_queries table
-#[cfg_attr(feature = "testing", derive(Arbitrary))]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Display,
-    PartialEq,
-    Eq,
-    EnumIter,
-    DeriveActiveEnum,
-    Serialize,
-    Deserialize,
-)]
-#[sea_orm(
-    rs_type = "String",
-    db_type = "Text",
-    rename_all = "PascalCase"
-)]
-#[strum(serialize_all = "PascalCase")]
-pub enum TerminationState {
-    #[default]
-    Completed,
-    Stopped,
-    Failed,
 }
 
 impl From<String> for QueryState {
@@ -126,7 +97,6 @@ impl QueryState {
                 QueryState::Stopped,
                 QueryState::Failed,
             ],
-            // Terminal states have no valid next states
             QueryState::Completed | QueryState::Stopped | QueryState::Failed => vec![],
         }
     }

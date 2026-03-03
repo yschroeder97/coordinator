@@ -102,8 +102,6 @@ impl ClusterService {
                     }
                     _ => {}
                 }
-                // Worker should be removed, remove from internal state and
-                // either cancel the connection task or just unregister and drop the client task
                 DesiredWorkerState::Removed => {
                     if let Some(state) = self.workers.remove(&addr) {
                         match state {
@@ -117,7 +115,6 @@ impl ClusterService {
                             }
                         }
                     }
-                    // Actually delete the worker from the catalog
                     self.worker_catalog
                         .delete_worker(&mismatch.host_addr)
                         .await

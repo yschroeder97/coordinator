@@ -86,7 +86,7 @@ impl From<Completed> for QueryStateInternal {
     }
 }
 
-pub trait Transition: Sized {
+pub(crate) trait Transition: Sized {
     type Next: Into<QueryStateInternal>;
 
     const STATE: QueryState;
@@ -133,10 +133,10 @@ async fn try_transition<T: Transition>(
     }
 }
 
-pub struct QueryReconciler;
+pub(crate) struct QueryReconciler;
 
 impl QueryReconciler {
-    pub async fn run(mut ctx: QueryContext, mut stop_rx: flume::Receiver<StopMode>) {
+    pub(crate) async fn run(mut ctx: QueryContext, mut stop_rx: flume::Receiver<StopMode>) {
         let span = info_span!(
             "query",
             id = ctx.query.id,

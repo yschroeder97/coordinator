@@ -70,7 +70,7 @@ pub struct CreatePhysicalSource {
 impl From<CreatePhysicalSource> for ActiveModel {
     fn from(req: CreatePhysicalSource) -> Self {
         Self {
-            id: NotSet, // Auto-increment
+            id: NotSet,
             logical_source: Set(req.logical_source),
             host_addr: Set(req.host_addr),
             source_type: Set(req.source_type),

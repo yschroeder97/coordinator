@@ -114,7 +114,6 @@ impl Cluster {
         }
     }
 
-    /// Randomly select worker nodes to kill based on `opts.kill_rate`, then kill and restart them.
     pub async fn kill_node(&self, opts: &KillOpts) {
         let mut nodes = vec![];
         for i in 1..=self.config.num_workers {
@@ -127,11 +126,6 @@ impl Cluster {
         }
     }
 
-    /// Kill the given nodes and restart them after a random delay.
-    ///
-    /// Each node is killed after a small random jitter (0-1s). Restart happens after another
-    /// random jitter, with a 10% chance of adding `restart_delay_secs` to simulate a node
-    /// being down long enough to be considered dead by the coordinator.
     pub async fn kill_nodes(
         &self,
         nodes: impl IntoIterator<Item = impl AsRef<str>>,
@@ -140,13 +134,11 @@ impl Cluster {
         join_all(nodes.into_iter().map(|name| async move {
             let name = name.as_ref();
 
-            // Random jitter before kill (0-1s)
             let t = thread_rng().gen_range(Duration::from_secs(0)..Duration::from_secs(1));
             tokio::time::sleep(t).await;
             info!("kill {name}");
             Handle::current().kill(name);
 
-            // Random jitter before restart (0-1s), with 10% chance of a long delay
             let mut t = thread_rng().gen_range(Duration::from_secs(0)..Duration::from_secs(1));
             if thread_rng().gen_bool(0.1) {
                 t += Duration::from_secs(restart_delay_secs as u64);
@@ -158,7 +150,6 @@ impl Cluster {
         .await;
     }
 
-    /// Kill the given nodes and restart them after exactly `restart_delay_secs`.
     pub async fn kill_nodes_and_restart(
         &self,
         nodes: impl IntoIterator<Item = impl AsRef<str>>,
@@ -175,7 +166,6 @@ impl Cluster {
         .await;
     }
 
-    /// Kill the given nodes without restarting them.
     pub async fn simple_kill_nodes(&self, nodes: impl IntoIterator<Item = impl AsRef<str>>) {
         join_all(nodes.into_iter().map(|name| async move {
             let name = name.as_ref();
@@ -185,7 +175,6 @@ impl Cluster {
         .await;
     }
 
-    /// Restart previously killed nodes.
     pub async fn simple_restart_nodes(&self, nodes: impl IntoIterator<Item = impl AsRef<str>>) {
         join_all(nodes.into_iter().map(|name| async move {
             let name = name.as_ref();

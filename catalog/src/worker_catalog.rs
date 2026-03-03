@@ -368,7 +368,6 @@ mod tests {
         let source_catalog = catalog.source.clone();
         let worker_catalog = catalog.worker.clone();
 
-        // Setup: create logical source, worker, and physical source
         source_catalog
             .create_logical_source(req.logical)
             .await
@@ -382,7 +381,6 @@ mod tests {
             .await
             .expect("Physical source creation should succeed");
 
-        // Property: Cannot delete worker while physical sources reference it
         assert!(
             worker_catalog
                 .delete_worker(&req.worker.host_addr)
@@ -398,7 +396,6 @@ mod tests {
         let sink_catalog = catalog.sink.clone();
         let worker_catalog = catalog.worker.clone();
 
-        // Setup: create worker and sink
         worker_catalog
             .create_worker(req.worker.clone())
             .await
@@ -408,7 +405,6 @@ mod tests {
             .await
             .expect("Sink creation should succeed");
 
-        // Property: Cannot delete worker while sinks reference it
         assert!(
             worker_catalog
                 .delete_worker(&req.worker.host_addr)
@@ -441,18 +437,15 @@ mod tests {
             .expect("Second creation after delete should succeed");
     }
 
-    /// Property: get_mismatch correctly partitions workers by state match
     async fn prop_get_mismatch_correctness(workers: Vec<CreateWorker>) {
         let catalog = Catalog::for_test().await;
 
-        // Create all workers (they start with Pending/Active - a mismatch)
         let mut created: Vec<worker::Model> = Vec::new();
         for worker in &workers {
             let model = catalog.worker.create_worker(worker.clone()).await.unwrap();
             created.push(model);
         }
 
-        // Mark workers at even indices as Active to create matches (current=Active=desired)
         for (i, worker) in created.into_iter().enumerate() {
             if i % 2 == 0 {
                 catalog

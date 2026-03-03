@@ -4,7 +4,7 @@ use crate::query::reconciler::Transition;
 use model::query::StopMode;
 use model::query::query_state::QueryState;
 
-pub struct Pending;
+pub(crate) struct Pending;
 
 impl Transition for Pending {
     type Next = Planned;

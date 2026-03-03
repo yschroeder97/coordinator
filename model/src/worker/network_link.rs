@@ -30,9 +30,4 @@ pub enum Relation {
     TargetWorker,
 }
 
-// Note: We intentionally don't implement Related<super::Entity> here because
-// there are two foreign keys to Worker (source and target). Instead, use the
-// Linked traits (WorkerToOutgoingNeighbors, WorkerToIncomingNeighbors) defined
-// in the parent module for querying relationships.
-
 impl ActiveModelBehavior for ActiveModel {}

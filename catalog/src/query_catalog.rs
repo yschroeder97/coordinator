@@ -231,8 +231,6 @@ impl QueryCatalog {
         Ok(updated)
     }
 
-    /// Stop a query by setting all non-terminal fragments to Stopped (letting the DB trigger
-    /// derive the query state), or directly setting the query to Stopped if no fragments exist.
     pub async fn stop_query(&self, query: &query::Model) -> Result<query::Model> {
         let result = self
             .db
@@ -304,11 +302,9 @@ impl Reconcilable for QueryCatalog {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 impl QueryCatalog {
-    /// Walk all fragments of a query through sequential states until reaching `target`.
-    /// Used by tests to advance fragment (and thus query) state via the proper trigger path.
-    pub async fn walk_fragments_to_state(
+    async fn walk_fragments_to_state(
         &self,
         query_id: i64,
         fragments: &[fragment::Model],
@@ -632,10 +628,6 @@ mod tests {
         );
     }
 
-    // -- Query state property tests --
-
-    /// Walking a valid state path results in the expected state at each step,
-    /// and the query remains retrievable throughout.
     async fn prop_query_state_path_valid(
         req: CreateQuery,
         setup: model::testing::ValidFragments,
@@ -652,7 +644,6 @@ mod tests {
             assert_eq!(model.current_state, *expected_state);
         }
 
-        // Query is still retrievable and matches the last walked model
         let results = catalog
             .query
             .get_query(GetQuery::all().with_id(created.id))
@@ -662,7 +653,6 @@ mod tests {
         assert_eq!(results[0], *models.last().unwrap());
     }
 
-    /// After reaching a terminal state, the query's name and statement are preserved.
     async fn prop_terminal_state_preserves_identity(
         req: CreateQuery,
         setup: model::testing::ValidFragments,
@@ -681,11 +671,6 @@ mod tests {
         assert!(final_model.current_state.is_terminal());
     }
 
-    /// Invalid state transitions are rejected by the DB trigger. The query state
-    /// is unchanged after a failed transition attempt.
-    ///
-    /// This test uses the private `set_query_state` to directly test the
-    /// `validate_query_state_transition` DB trigger.
     async fn prop_invalid_transitions_rejected(
         req: CreateQuery,
         setup: model::testing::ValidFragments,
@@ -697,7 +682,6 @@ mod tests {
         }
         let created = catalog.query.create_query(req.clone()).await.unwrap();
 
-        // Walk to a non-terminal state (all but the last element of path)
         let non_terminal_path = &path[..path.len() - 1];
         let models = walk_query_via_fragments(&catalog, &created, &setup, non_terminal_path).await;
         let current = models.last().unwrap();
@@ -716,7 +700,6 @@ mod tests {
             );
         }
 
-        // Verify model is unchanged
         let refetched = catalog
             .query
             .get_query(GetQuery::all().with_id(created.id))
@@ -726,10 +709,6 @@ mod tests {
         assert_eq!(refetched[0], *current);
     }
 
-    // -- Fragment property tests --
-
-    /// Every returned fragment has correct defaults (state=Pending, no timestamps,
-    /// no error), all input fields are preserved, and fragment IDs are unique.
     async fn prop_fragments_stored_with_correct_defaults(
         req: CreateQuery,
         setup: model::testing::ValidFragments,
@@ -770,7 +749,6 @@ mod tests {
         }
     }
 
-    /// Inserting fragments that reference a non-existent query is rejected (FK violation).
     async fn prop_fragments_reject_missing_query(setup: model::testing::ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -799,7 +777,6 @@ mod tests {
         );
     }
 
-    /// Inserting fragments that reference non-existent workers is rejected (FK violation).
     async fn prop_fragments_reject_missing_worker(
         req: CreateQuery,
         setup: model::testing::ValidFragments,

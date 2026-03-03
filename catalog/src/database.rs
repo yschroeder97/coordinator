@@ -20,8 +20,7 @@ pub enum StateBackend {
 
 #[derive(Clone)]
 pub struct Database {
-    pub conn: DatabaseConnection,
-    pub endpoint: String,
+    pub(crate) conn: DatabaseConnection,
 }
 
 impl Database {
@@ -42,10 +41,7 @@ impl Database {
                         .to_owned(),
                 )
                 .await?;
-                Ok(Self {
-                    conn,
-                    endpoint: IN_MEMORY_DB.to_owned(),
-                })
+                Ok(Self { conn })
             }
             _ => bail!("Storage backend currently not supported"),
         }

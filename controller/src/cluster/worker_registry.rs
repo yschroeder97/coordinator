@@ -18,7 +18,7 @@ pub(crate) enum WorkerError {
 }
 
 impl WorkerError {
-    pub fn is_retryable(&self) -> bool {
+    pub(crate) fn is_retryable(&self) -> bool {
         match self {
             Self::ClientUnavailable(_) | Self::ClientError(WorkerClientErr::Connection(..)) => {
                 true
@@ -35,7 +35,6 @@ impl WorkerError {
     }
 }
 
-/// Extract a metadata value as a string, returning an empty string if absent.
 fn meta_str(status: &tonic::Status, key: &str) -> String {
     status
         .metadata()
@@ -82,7 +81,6 @@ impl From<WorkerError> for FragmentError {
     }
 }
 
-/// Read-only handle for sending RPCs to workers
 pub struct WorkerRegistryHandle {
     shared: Arc<RwLock<HashMap<GrpcAddr, flume::Sender<Rpc>>>>,
 }
@@ -116,13 +114,11 @@ impl WorkerRegistryHandle {
         sender?
             .send_async(rpc)
             .await
-            // Client with addr has been removed
             .map_err(|_| WorkerError::ClientUnavailable(addr.clone()))
     }
 
 }
 
-/// Writer interface for the worker registry
 #[derive(Default)]
 pub(crate) struct WorkerRegistry {
     shared: Arc<RwLock<HashMap<GrpcAddr, flume::Sender<Rpc>>>>,

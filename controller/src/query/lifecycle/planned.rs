@@ -5,8 +5,8 @@ use model::query::StopMode;
 use model::query::fragment;
 use model::query::query_state::QueryState;
 
-pub struct Planned {
-    pub fragments: Vec<fragment::Model>,
+pub(crate) struct Planned {
+    pub(crate) fragments: Vec<fragment::Model>,
 }
 
 impl Transition for Planned {
