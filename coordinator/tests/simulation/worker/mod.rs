@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use madsim::rand::{Rng, thread_rng};
 use tonic::metadata::MetadataMap;
 use tonic::{Code, Request, Response, Status};
@@ -69,18 +69,25 @@ struct QueryFragment {
     error: bool,
 }
 
-#[derive(Default)]
-struct WorkerConfig {
-    exception_prob: f32,
+#[derive(Default, Debug, Clone)]
+pub struct MockWorkerConfig {
+    pub rpc_delay: Option<(Duration, Duration)>,
+    pub internal_error_rate: f32,
 }
 
-#[derive(Default)]
 pub struct SingleNodeWorker {
-    worker_config: WorkerConfig,
+    config: MockWorkerConfig,
     fragments: Arc<RwLock<HashMap<FragmentId, QueryFragment>>>,
 }
 
 impl SingleNodeWorker {
+    pub fn new(config: MockWorkerConfig) -> Self {
+        Self {
+            config,
+            fragments: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
     fn current_timestamp_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -98,10 +105,7 @@ impl SingleNodeWorker {
         F: FnOnce(&mut QueryFragment) -> R,
     {
         match self.fragments.write().unwrap().get_mut(&query_id) {
-            Some(query) => {
-                self.maybe_fail()?;
-                Ok(f(query))
-            }
+            Some(query) => Ok(f(query)),
             None => Err(Self::query_not_found_error(query_id)),
         }
     }
@@ -116,17 +120,21 @@ impl SingleNodeWorker {
         }
     }
 
-    fn maybe_fail(&self) -> Result<(), Status> {
-        if thread_rng().gen_range(0.0..1.0) < self.worker_config.exception_prob {
+    async fn inject_fault(&self) -> Result<(), Status> {
+        if let Some((min, max)) = self.config.rpc_delay {
+            let delay = thread_rng().gen_range(min..=max);
+            tokio::time::sleep(delay).await;
+        }
+        if thread_rng().gen_range(0.0..1.0) < self.config.internal_error_rate {
             let mut metadata = MetadataMap::new();
             metadata.insert("code", "0".parse().unwrap());
             metadata.insert("what", "internal error".parse().unwrap());
             metadata.insert("trace", "empty".parse().unwrap());
-            error!("RPC failed with internal error");
+            error!("RPC failed with injected internal error");
 
             return Err(Status::with_metadata(
                 Code::Internal,
-                "internal error",
+                "injected internal error",
                 metadata,
             ));
         }
@@ -141,7 +149,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<RegisterQueryRequest>,
     ) -> Result<Response<RegisterQueryReply>, Status> {
-        self.maybe_fail()?;
+        self.inject_fault().await?;
 
         let id = request.get_ref().query_id;
         self.fragments.write().unwrap().insert(id, QueryFragment::default());
@@ -155,10 +163,10 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<UnregisterQueryRequest>,
     ) -> Result<Response<()>, Status> {
+        self.inject_fault().await?;
         let query_id = request.get_ref().query_id;
         match self.fragments.write().unwrap().remove(&query_id) {
             Some(_) => {
-                self.maybe_fail()?;
                 debug!("Unregistered query");
                 Ok(Response::new(()))
             }
@@ -171,6 +179,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<StartQueryRequest>,
     ) -> Result<Response<()>, Status> {
+        self.inject_fault().await?;
         let query_id = request.get_ref().query_id;
         self.with_query_mut(query_id, |query| {
             query.state = QueryFragmentState::Running;
@@ -182,6 +191,7 @@ impl WorkerRpcService for SingleNodeWorker {
 
     #[instrument(skip(self), fields(query_id = %request.get_ref().query_id))]
     async fn stop_query(&self, request: Request<StopQueryRequest>) -> Result<Response<()>, Status> {
+        self.inject_fault().await?;
         let query_id = request.get_ref().query_id;
         self.with_query_mut(query_id, |query| {
             query.state = QueryFragmentState::Stopped;
@@ -196,7 +206,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<QueryStatusRequest>,
     ) -> Result<Response<QueryStatusReply>, Status> {
-        self.maybe_fail()?;
+        self.inject_fault().await?;
         let query_id = request.get_ref().query_id;
         let reply = self.with_query(query_id, |query| QueryStatusReply {
             query_id: query_id.clone(),
@@ -211,7 +221,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<QueryLogRequest>,
     ) -> Result<Response<QueryLogReply>, Status> {
-        self.maybe_fail()?;
+        self.inject_fault().await?;
         let _ = request;
         Ok(Response::new(QueryLogReply { entries: vec![] }))
     }
@@ -221,7 +231,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<WorkerStatusRequest>,
     ) -> Result<Response<WorkerStatusResponse>, Status> {
-        self.maybe_fail()?;
+        self.inject_fault().await?;
         let queries = self.fragments.read().unwrap();
         let (terminated, active): (Vec<_>, Vec<_>) = queries.iter().partition(|(_, query)| {
             query.state == QueryFragmentState::Failed || query.state == QueryFragmentState::Stopped

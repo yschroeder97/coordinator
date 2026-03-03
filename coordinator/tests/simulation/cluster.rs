@@ -1,5 +1,5 @@
 #![cfg(madsim)]
-use crate::worker::{HealthServer, HealthServiceImpl, SingleNodeWorker, WorkerRpcServiceServer};
+use crate::worker::{HealthServer, HealthServiceImpl, MockWorkerConfig, SingleNodeWorker, WorkerRpcServiceServer};
 use anyhow::Result;
 use controller::request::Request;
 use coordinator::coordinator::{CoordinatorRequest, start_for_test};
@@ -23,6 +23,7 @@ pub struct KillOpts {
 pub struct ClusterConfig {
     pub num_workers: usize,
     pub kill_opts: KillOpts,
+    pub worker_config: MockWorkerConfig,
 }
 
 impl Default for ClusterConfig {
@@ -30,6 +31,7 @@ impl Default for ClusterConfig {
         ClusterConfig {
             num_workers: 1,
             kill_opts: Default::default(),
+            worker_config: Default::default(),
         }
     }
 }
@@ -95,20 +97,24 @@ impl Cluster {
 
     fn start_workers(net: &Handle, config: &ClusterConfig) {
         for i in 1..=config.num_workers {
+            let worker_config = config.worker_config.clone();
             net.create_node()
                 .name(format!("worker-{i}"))
                 .ip(format!("192.168.2.{i}").parse().unwrap())
-                .init(move || async move {
-                    info!("worker-{i} starting");
-                    let worker = SingleNodeWorker::default();
-                    let svc = WorkerRpcServiceServer::new(worker);
+                .init(move || {
+                    let wc = worker_config.clone();
+                    async move {
+                        info!("worker-{i} starting");
+                        let worker = SingleNodeWorker::new(wc);
+                        let svc = WorkerRpcServiceServer::new(worker);
 
-                    Server::builder()
-                        .add_service(svc)
-                        .add_service(HealthServer::new(HealthServiceImpl))
-                        .serve("0.0.0.0:8080".parse().unwrap())
-                        .await
-                        .expect("Worker could not be started");
+                        Server::builder()
+                            .add_service(svc)
+                            .add_service(HealthServer::new(HealthServiceImpl))
+                            .serve("0.0.0.0:8080".parse().unwrap())
+                            .await
+                            .expect("Worker could not be started");
+                    }
                 })
                 .build();
         }
