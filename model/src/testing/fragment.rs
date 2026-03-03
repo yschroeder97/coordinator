@@ -6,19 +6,19 @@ use serde_json::json;
 use super::worker::arb_unique_workers;
 
 #[derive(Debug, Clone)]
-pub struct FragmentSetup {
+pub struct ValidFragments {
     pub workers: Vec<CreateWorker>,
-    fragment_specs: Vec<FragmentSpec>,
+    fragment_specs: Vec<FragmentConfig>,
 }
 
 #[derive(Debug, Clone)]
-struct FragmentSpec {
+struct FragmentConfig {
     worker_idx: usize,
     used_capacity: i32,
     has_source: bool,
 }
 
-impl FragmentSetup {
+impl ValidFragments {
     pub fn create_fragments(&self, query_id: i64) -> Vec<CreateFragment> {
         self.fragment_specs
             .iter()
@@ -37,7 +37,7 @@ impl FragmentSetup {
     }
 }
 
-pub fn arb_fragment_setup(max_workers: usize) -> impl Strategy<Value = FragmentSetup> {
+pub fn arb_fragment_setup(max_workers: usize) -> impl Strategy<Value = ValidFragments> {
     (
         arb_unique_workers(max_workers),
         prop::collection::vec((0..=16i32, any::<bool>()), 1..=20usize),
@@ -60,7 +60,7 @@ pub fn arb_fragment_setup(max_workers: usize) -> impl Strategy<Value = FragmentS
 
                 if let Some(offset) = placed {
                     let idx = (fragment_specs.len() + offset) % num_workers;
-                    fragment_specs.push(FragmentSpec {
+                    fragment_specs.push(FragmentConfig {
                         worker_idx: idx,
                         used_capacity,
                         has_source,
@@ -69,14 +69,14 @@ pub fn arb_fragment_setup(max_workers: usize) -> impl Strategy<Value = FragmentS
             }
 
             if fragment_specs.is_empty() {
-                fragment_specs.push(FragmentSpec {
+                fragment_specs.push(FragmentConfig {
                     worker_idx: 0,
                     used_capacity: 0,
                     has_source: false,
                 });
             }
 
-            FragmentSetup {
+            ValidFragments {
                 workers,
                 fragment_specs,
             }
