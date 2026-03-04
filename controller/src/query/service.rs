@@ -15,7 +15,7 @@ use futures_util::FutureExt;
 use std::panic::AssertUnwindSafe;
 use tracing::{debug, error, info, warn};
 
-const QUERY_SERVICE_POLLING_DURATION: Duration = Duration::from_secs(10);
+pub const QUERY_SERVICE_POLLING_DURATION: Duration = Duration::from_secs(10);
 
 pub struct QueryService {
     catalog: Arc<Catalog>,

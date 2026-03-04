@@ -3,6 +3,7 @@ use crate::worker::{HealthServer, HealthServiceImpl, MockWorkerConfig, SingleNod
 use anyhow::Result;
 use controller::cluster::service::CLUSTER_SERVICE_POLLING_DURATION;
 use controller::cluster::worker_client::{CONNECT_INITIAL_BACKOFF_MS, CONNECT_MAX_RETRIES, CONNECT_TIMEOUT};
+use controller::query::service::QUERY_SERVICE_POLLING_DURATION;
 use controller::request::Request;
 use coordinator::coordinator::{CoordinatorRequest, start_for_test};
 use futures::future::join_all;
@@ -54,6 +55,12 @@ pub const fn worker_recovery_deadline() -> Duration {
             + CLUSTER_SERVICE_POLLING_DURATION.as_secs()
             + CONNECT_TIMEOUT.as_secs(),
     )
+}
+
+pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+pub const fn query_reconciliation_deadline() -> Duration {
+    Duration::from_secs(2 * QUERY_SERVICE_POLLING_DURATION.as_secs())
 }
 
 pub fn arb_query() -> CreateQuery {
