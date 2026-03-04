@@ -8,8 +8,12 @@ use coordinator::coordinator::{CoordinatorRequest, start_for_test};
 use futures::future::join_all;
 use madsim::rand::{Rng, thread_rng};
 use madsim::runtime::{Handle, NodeHandle};
+use model::query::CreateQuery;
+use model::query::arb_create_query;
 use model::worker::endpoint::NetworkAddr;
 use model::worker::{CreateWorker, GetWorker, WorkerState};
+use proptest::strategy::{Strategy, ValueTree};
+use proptest::test_runner::TestRunner;
 use std::fmt::Debug;
 use std::time::Duration;
 use tonic::transport::Server;
@@ -50,6 +54,14 @@ pub const fn worker_recovery_deadline() -> Duration {
             + CLUSTER_SERVICE_POLLING_DURATION.as_secs()
             + CONNECT_TIMEOUT.as_secs(),
     )
+}
+
+pub fn arb_query() -> CreateQuery {
+    let mut runner = TestRunner::default();
+    arb_create_query()
+        .new_tree(&mut runner)
+        .unwrap()
+        .current()
 }
 
 pub struct Cluster {

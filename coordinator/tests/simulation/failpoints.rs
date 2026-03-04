@@ -1,7 +1,7 @@
 #![cfg(madsim)]
-use crate::cluster::Cluster;
+use crate::cluster::{Cluster, arb_query};
 use model::query::query_state::QueryState;
-use model::query::{CreateQuery, GetQuery};
+use model::query::GetQuery;
 use std::time::Duration;
 
 async fn poll_query_state(
@@ -37,7 +37,7 @@ async fn recovery_after_pre_register_crash() {
     fail::cfg("reconciler_pre_register", "1*panic(injected pre-register crash)").unwrap();
 
     let created: model::query::Model = cluster
-        .send(CreateQuery::new("SELECT 1 FROM test".to_string()))
+        .send(arb_query().block_until(QueryState::Pending))
         .await
         .unwrap();
 
@@ -52,7 +52,7 @@ async fn recovery_after_pre_start_crash() {
     fail::cfg("reconciler_pre_start", "1*panic(injected pre-start crash)").unwrap();
 
     let created: model::query::Model = cluster
-        .send(CreateQuery::new("SELECT 1 FROM test".to_string()))
+        .send(arb_query().block_until(QueryState::Pending))
         .await
         .unwrap();
 
@@ -67,7 +67,7 @@ async fn recovery_after_post_rpc_pre_db_crash() {
     fail::cfg("reconciler_post_rpc_pre_db", "1*panic(injected post-rpc crash)").unwrap();
 
     let created: model::query::Model = cluster
-        .send(CreateQuery::new("SELECT 1 FROM test".to_string()))
+        .send(arb_query().block_until(QueryState::Pending))
         .await
         .unwrap();
 
@@ -82,7 +82,7 @@ async fn error_during_create_fragments_fails_query() {
     fail::cfg("reconciler_create_fragments", "1*return").unwrap();
 
     let created: model::query::Model = cluster
-        .send(CreateQuery::new("SELECT 1 FROM test".to_string()))
+        .send(arb_query().block_until(QueryState::Pending))
         .await
         .unwrap();
 
