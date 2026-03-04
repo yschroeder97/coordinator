@@ -15,17 +15,13 @@ pub enum Relation {
     #[sea_orm(
         belongs_to = "super::Entity",
         from = "Column::SourceHostAddr",
-        to = "super::Column::HostAddr",
-        on_update = "Cascade",
-        on_delete = "Cascade"
+        to = "super::Column::HostAddr"
     )]
     SourceWorker,
     #[sea_orm(
         belongs_to = "super::Entity",
         from = "Column::TargetHostAddr",
-        to = "super::Column::HostAddr",
-        on_update = "Cascade",
-        on_delete = "Cascade"
+        to = "super::Column::HostAddr"
     )]
     TargetWorker,
 }

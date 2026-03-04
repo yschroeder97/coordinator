@@ -8,8 +8,9 @@ use model::worker::{
     self, CreateWorker, DesiredWorkerState, DropWorker, Entity as WorkerEntity, GetWorker,
     WorkerState,
 };
+use model::worker::topology::WorkerTopology;
 use sea_orm::sea_query::Expr;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, QueryFilter, TransactionTrait};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use std::sync::Arc;
 
 pub struct WorkerCatalog {
@@ -77,6 +78,14 @@ impl WorkerCatalog {
             .one(&self.db.conn)
             .await?;
         if model.is_some() {
+            network_link::Entity::delete_many()
+                .filter(
+                    network_link::Column::SourceHostAddr
+                        .eq(host_addr.clone())
+                        .or(network_link::Column::TargetHostAddr.eq(host_addr.clone())),
+                )
+                .exec(&self.db.conn)
+                .await?;
             WorkerEntity::delete_by_id(host_addr.clone())
                 .exec(&self.db.conn)
                 .await?;
@@ -93,6 +102,18 @@ impl WorkerCatalog {
         let updated = worker.update(&self.db.conn).await?;
         self.listeners.notify_state();
         Ok(updated)
+    }
+
+    pub async fn get_topology(&self) -> Result<WorkerTopology> {
+        let workers = WorkerEntity::find().all(&self.db.conn).await?;
+        let links = network_link::Entity::find().all(&self.db.conn).await?;
+        let edges = links
+            .into_iter()
+            .map(|l| (l.source_host_addr, l.target_host_addr))
+            .collect();
+        let topology = WorkerTopology { workers, edges };
+        topology.validate()?;
+        Ok(topology)
     }
 }
 
@@ -123,10 +144,16 @@ mod tests {
     use model::query::CreateQuery;
     use model::query::fragment::CreateFragment;
     use model::testing::{
-        PhysicalSourceWithRefs, SinkWithRefs, arb_create_worker, arb_physical_with_refs,
-        arb_sink_with_refs, arb_unique_workers,
+        PhysicalSourceWithRefs, SinkWithRefs, arb_create_worker, arb_dag_topology,
+        arb_physical_with_refs, arb_sink_with_refs,
     };
+    use model::worker::topology::CycleDetected;
     use proptest::prelude::*;
+
+    /// Upper bound on workers generated per test case. Kept low because potential
+    /// edges grow quadratically (n*(n-1)/2), so larger values slow proptest
+    /// shrinking and make minimal failing cases harder to find.
+    const MAX_TEST_WORKERS: usize = 8;
 
     async fn prop_create_and_get_worker(req: CreateWorker) {
         let catalog = Catalog::for_test().await;
@@ -283,7 +310,7 @@ mod tests {
         );
     }
 
-    async fn prop_network_links_cascade_on_source_delete(w1: CreateWorker, w2: CreateWorker) {
+    async fn prop_network_links_cleaned_on_source_delete(w1: CreateWorker, w2: CreateWorker) {
         if w1.host_addr == w2.host_addr || w1.grpc_addr == w2.grpc_addr {
             return;
         }
@@ -298,16 +325,16 @@ mod tests {
             .worker
             .delete_worker(&w1.host_addr)
             .await
-            .expect("Deleting worker with outgoing links should succeed via CASCADE");
+            .expect("Deleting worker should clean up its outgoing links");
 
         catalog
             .worker
             .delete_worker(&w2.host_addr)
             .await
-            .expect("Peer should be deletable after source worker cascade");
+            .expect("Peer should be deletable after source worker cleanup");
     }
 
-    async fn prop_network_links_cascade_on_target_delete(w1: CreateWorker, w2: CreateWorker) {
+    async fn prop_network_links_cleaned_on_target_delete(w1: CreateWorker, w2: CreateWorker) {
         if w1.host_addr == w2.host_addr || w1.grpc_addr == w2.grpc_addr {
             return;
         }
@@ -322,13 +349,13 @@ mod tests {
             .worker
             .delete_worker(&w2.host_addr)
             .await
-            .expect("Deleting target of a link should succeed via CASCADE");
+            .expect("Deleting target of a link should clean up incoming links");
 
         catalog
             .worker
             .delete_worker(&w1.host_addr)
             .await
-            .expect("Source worker should be deletable after target cascade");
+            .expect("Source worker should be deletable after target cleanup");
     }
 
     async fn prop_duplicate_peer_rejected(w1: CreateWorker, w2: CreateWorker) {
@@ -480,6 +507,40 @@ mod tests {
         }
     }
 
+    async fn prop_dag_topology_round_trip(workers: Vec<CreateWorker>) {
+        let catalog = Catalog::for_test().await;
+
+        let expected_edge_count: usize = workers.iter().map(|w| w.peers.len()).sum();
+
+        for worker in &workers {
+            catalog.worker.create_worker(worker.clone()).await.unwrap();
+        }
+
+        let result = catalog.worker.get_topology().await;
+        assert!(result.is_ok(), "Generated DAG should validate: {:?}", result.err());
+        let topo = result.unwrap();
+        assert_eq!(topo.workers.len(), workers.len());
+        assert_eq!(topo.edges.len(), expected_edge_count);
+    }
+
+    async fn prop_cycle_detection(w1: CreateWorker, w2: CreateWorker) {
+        if w1.host_addr == w2.host_addr || w1.grpc_addr == w2.grpc_addr {
+            return;
+        }
+
+        let catalog = Catalog::for_test().await;
+
+        let w1 = w1.with_peers(vec![w2.host_addr.clone()]);
+        let w2 = w2.with_peers(vec![w1.host_addr.clone()]);
+        catalog.worker.create_worker(w1).await.unwrap();
+        catalog.worker.create_worker(w2).await.unwrap();
+
+        let result = catalog.worker.get_topology().await;
+        assert!(result.is_err(), "Mutual peers should form a cycle");
+        let err = result.unwrap_err();
+        assert!(err.downcast_ref::<CycleDetected>().is_some());
+    }
+
     proptest! {
         #[test]
         fn create_and_get_worker(req in arb_create_worker()) {
@@ -538,16 +599,16 @@ mod tests {
         }
 
         #[test]
-        fn network_links_cascade_on_source_delete((w1, w2) in (arb_create_worker(), arb_create_worker())) {
+        fn network_links_cleaned_on_source_delete((w1, w2) in (arb_create_worker(), arb_create_worker())) {
             test_prop(|| async move {
-                prop_network_links_cascade_on_source_delete(w1, w2).await;
+                prop_network_links_cleaned_on_source_delete(w1, w2).await;
             });
         }
 
         #[test]
-        fn network_links_cascade_on_target_delete((w1, w2) in (arb_create_worker(), arb_create_worker())) {
+        fn network_links_cleaned_on_target_delete((w1, w2) in (arb_create_worker(), arb_create_worker())) {
             test_prop(|| async move {
-                prop_network_links_cascade_on_target_delete(w1, w2).await;
+                prop_network_links_cleaned_on_target_delete(w1, w2).await;
             });
         }
 
@@ -587,9 +648,23 @@ mod tests {
         }
 
         #[test]
-        fn get_mismatch_correctness(workers in arb_unique_workers(10)) {
+        fn get_mismatch_correctness(workers in arb_dag_topology(MAX_TEST_WORKERS)) {
             test_prop(|| async move {
                 prop_get_mismatch_correctness(workers).await;
+            });
+        }
+
+        #[test]
+        fn dag_topology_round_trip(workers in arb_dag_topology(MAX_TEST_WORKERS)) {
+            test_prop(|| async move {
+                prop_dag_topology_round_trip(workers).await;
+            });
+        }
+
+        #[test]
+        fn cycle_detection((w1, w2) in (arb_create_worker(), arb_create_worker())) {
+            test_prop(|| async move {
+                prop_cycle_detection(w1, w2).await;
             });
         }
     }

@@ -191,20 +191,6 @@ impl MigrationTrait for Migration {
                             .col(NetworkLink::SourceHostAddr)
                             .col(NetworkLink::TargetHostAddr),
                     )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(NetworkLink::Table, NetworkLink::SourceHostAddr)
-                            .to(Worker::Table, Worker::HostAddr)
-                            .on_delete(ForeignKeyAction::Cascade)
-                            .on_update(ForeignKeyAction::Cascade),
-                    )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(NetworkLink::Table, NetworkLink::TargetHostAddr)
-                            .to(Worker::Table, Worker::HostAddr)
-                            .on_delete(ForeignKeyAction::Cascade)
-                            .on_update(ForeignKeyAction::Cascade),
-                    )
                     .to_owned(),
             )
             .await?;

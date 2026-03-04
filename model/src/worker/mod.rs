@@ -1,5 +1,6 @@
 pub mod endpoint;
 pub mod network_link;
+pub mod topology;
 
 use endpoint::{GrpcAddr, HostAddr};
 use sea_orm::ActiveValue::Set;
@@ -158,11 +159,22 @@ impl DropWorker {
 }
 
 #[cfg(feature = "testing")]
+fn arb_capacity() -> impl proptest::prelude::Strategy<Value = i32> {
+    use proptest::prelude::*;
+    prop_oneof![
+        1 => Just(0i32),
+        5 => 1..=16i32,
+        3 => 17..=128i32,
+        1 => 129..=1024i32,
+    ]
+}
+
+#[cfg(feature = "testing")]
 proptest::prop_compose! {
     pub fn arb_create_worker()(
         host_addr in endpoint::arb_host_addr(),
         grpc_port in 1024..65535u16,
-        capacity in 0..1024i32,
+        capacity in arb_capacity(),
     ) -> CreateWorker {
         let grpc_port = if grpc_port == host_addr.port {
             if grpc_port < 65534 { grpc_port + 1 } else { grpc_port - 1 }

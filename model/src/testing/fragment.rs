@@ -3,7 +3,7 @@ use crate::worker::CreateWorker;
 use proptest::prelude::*;
 use serde_json::json;
 
-use super::worker::arb_unique_workers;
+use super::worker::arb_dag_topology;
 
 #[derive(Debug, Clone)]
 pub struct ValidFragments {
@@ -39,7 +39,7 @@ impl ValidFragments {
 
 pub fn arb_fragment_setup(max_workers: usize) -> impl Strategy<Value = ValidFragments> {
     (
-        arb_unique_workers(max_workers),
+        arb_dag_topology(max_workers),
         prop::collection::vec((0..=16i32, any::<bool>()), 1..=20usize),
     )
         .prop_map(|(workers, fragment_params)| {
