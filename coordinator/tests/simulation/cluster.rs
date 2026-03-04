@@ -14,7 +14,7 @@ use model::query::arb_create_query;
 use model::worker::endpoint::NetworkAddr;
 use model::worker::{CreateWorker, GetWorker, WorkerState};
 use proptest::strategy::{Strategy, ValueTree};
-use proptest::test_runner::TestRunner;
+use proptest::test_runner::{TestRng, TestRunner, RngAlgorithm};
 use std::fmt::Debug;
 use std::time::Duration;
 use tonic::transport::Server;
@@ -64,11 +64,15 @@ pub const fn query_reconciliation_deadline() -> Duration {
 }
 
 pub fn arb_query() -> CreateQuery {
-    let mut runner = TestRunner::default();
+    use model::query::query_state::QueryState;
+    let seed: [u8; 32] = thread_rng().r#gen();
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
+    let mut runner = TestRunner::new_with_rng(Default::default(), rng);
     arb_create_query()
         .new_tree(&mut runner)
         .unwrap()
         .current()
+        .block_until(QueryState::Pending)
 }
 
 pub struct Cluster {
