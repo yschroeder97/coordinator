@@ -10,8 +10,8 @@ use tokio::sync::oneshot;
 use tokio_retry::RetryIf;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 
-const MAX_RPC_ATTEMPTS: usize = 5;
-const RPC_RETRY_BASE_MS: u64 = 50;
+pub const MAX_RPC_ATTEMPTS: usize = 5;
+pub const RPC_RETRY_BASE_MS: u64 = 50;
 const ROLLBACK_RETRY_MAX: Duration = Duration::from_secs(30);
 
 pub(crate) enum RetryPolicy {

@@ -159,7 +159,7 @@ impl DropWorker {
 }
 
 #[cfg(feature = "testing")]
-fn arb_capacity() -> impl proptest::prelude::Strategy<Value = i32> {
+pub(crate) fn arb_capacity() -> impl proptest::prelude::Strategy<Value = i32> {
     use proptest::prelude::*;
     prop_oneof![
         1 => Just(0i32),

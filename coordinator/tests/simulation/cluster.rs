@@ -2,7 +2,8 @@
 use crate::worker::{HealthServer, HealthServiceImpl, MockWorkerConfig, SingleNodeWorker, WorkerRpcServiceServer};
 use anyhow::Result;
 use controller::cluster::service::CLUSTER_SERVICE_POLLING_DURATION;
-use controller::cluster::worker_client::{CONNECT_INITIAL_BACKOFF_MS, CONNECT_MAX_RETRIES, CONNECT_TIMEOUT};
+use controller::cluster::worker_client::{CONNECT_INITIAL_BACKOFF_MS, CONNECT_MAX_RETRIES, CONNECT_TIMEOUT, RPC_TIMEOUT};
+use controller::query::MAX_RPC_ATTEMPTS;
 use controller::query::service::QUERY_SERVICE_POLLING_DURATION;
 use controller::request::Request;
 use coordinator::coordinator::{CoordinatorRequest, start_for_test};
@@ -11,6 +12,7 @@ use madsim::rand::{Rng, thread_rng};
 use madsim::runtime::{Handle, NodeHandle};
 use model::query::CreateQuery;
 use model::query::arb_create_query;
+use model::testing::arb_topology as arb_topology_strategy;
 use model::worker::endpoint::NetworkAddr;
 use model::worker::{CreateWorker, GetWorker, WorkerState};
 use proptest::strategy::{Strategy, ValueTree};
@@ -30,7 +32,6 @@ pub struct KillOpts {
 
 #[derive(Debug, Clone)]
 pub struct ClusterConfig {
-    pub num_workers: usize,
     pub kill_opts: KillOpts,
     pub worker_config: MockWorkerConfig,
 }
@@ -38,15 +39,20 @@ pub struct ClusterConfig {
 impl Default for ClusterConfig {
     fn default() -> Self {
         ClusterConfig {
-            num_workers: 1,
             kill_opts: Default::default(),
             worker_config: Default::default(),
         }
     }
 }
 
+// Upper bound on how long a worker can take to recover after restart:
+// - ClusterService must poll to initiate reconnection (CLUSTER_SERVICE_POLLING_DURATION)
+// - Connection uses exponential backoff with jitter: each step is up to
+//   2x the base delay, so worst-case total is 2 * CONNECT_INITIAL_BACKOFF_MS * (2^N - 1)
+// - Each of (CONNECT_MAX_RETRIES + 1) attempts waits up to CONNECT_TIMEOUT
+// - One final CONNECT_TIMEOUT for the successful attempt
 pub const fn worker_recovery_deadline() -> Duration {
-    let backoff_total_ms = CONNECT_INITIAL_BACKOFF_MS * ((1 << CONNECT_MAX_RETRIES) - 1);
+    let backoff_total_ms = 2 * CONNECT_INITIAL_BACKOFF_MS * ((1 << CONNECT_MAX_RETRIES) - 1);
     let connect_attempts_secs =
         (CONNECT_MAX_RETRIES as u64 + 1) * CONNECT_TIMEOUT.as_secs();
     Duration::from_secs(
@@ -59,59 +65,96 @@ pub const fn worker_recovery_deadline() -> Duration {
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+// Upper bound on how long a query can take to reach its target state:
+// - A crashed reconciler may complete up to 1 broadcast before failing,
+//   then the next reconciler does 2 broadcasts (register + start) = 3 total
+// - Each broadcast takes up to MAX_RPC_ATTEMPTS * RPC_TIMEOUT if all but
+//   the last attempt time out
+// - 2x QUERY_SERVICE_POLLING_DURATION for the two reconciler polling cycles
 pub const fn query_reconciliation_deadline() -> Duration {
-    Duration::from_secs(2 * QUERY_SERVICE_POLLING_DURATION.as_secs())
+    let max_broadcast_secs = MAX_RPC_ATTEMPTS as u64 * RPC_TIMEOUT.as_secs();
+    Duration::from_secs(
+        2 * QUERY_SERVICE_POLLING_DURATION.as_secs() + 3 * max_broadcast_secs,
+    )
+}
+
+fn madsim_test_runner() -> TestRunner {
+    let seed: [u8; 32] = thread_rng().r#gen();
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
+    TestRunner::new_with_rng(Default::default(), rng)
 }
 
 pub fn arb_query() -> CreateQuery {
     use model::query::query_state::QueryState;
-    let seed: [u8; 32] = thread_rng().r#gen();
-    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
-    let mut runner = TestRunner::new_with_rng(Default::default(), rng);
     arb_create_query()
-        .new_tree(&mut runner)
+        .new_tree(&mut madsim_test_runner())
         .unwrap()
         .current()
         .block_until(QueryState::Pending)
 }
 
+pub fn arb_topology() -> Vec<CreateWorker> {
+    arb_topology_strategy(1)
+        .new_tree(&mut madsim_test_runner())
+        .unwrap()
+        .current()
+}
+
+pub fn arb_topology_min(min: u8) -> Vec<CreateWorker> {
+    arb_topology_strategy(min)
+        .new_tree(&mut madsim_test_runner())
+        .unwrap()
+        .current()
+}
+
+pub fn arb_worker_config() -> MockWorkerConfig {
+    let max_delay_ms = MAX_RPC_ATTEMPTS as u64 * RPC_TIMEOUT.as_millis() as u64;
+    let max: u64 = thread_rng().gen_range(0..=max_delay_ms);
+    MockWorkerConfig {
+        max_rpc_delay: Some(Duration::from_millis(max)),
+        internal_error_rate: 0.0,
+    }
+}
+
 pub struct Cluster {
     pub config: ClusterConfig,
     pub handle: Handle,
+    workers: Vec<CreateWorker>,
     coordinator: (flume::Sender<CoordinatorRequest>, NodeHandle),
 }
 
 impl Cluster {
-    pub async fn start(config: ClusterConfig) -> Result<Self> {
+    pub async fn start(workers: &[CreateWorker], config: ClusterConfig) -> Result<Self> {
         let handle = madsim::runtime::Handle::current();
 
-        Self::start_workers(&handle, &config);
+        Self::start_workers(&handle, workers, &config.worker_config);
         let coordinator = Self::start_coordinator(&handle).await;
 
         Ok(Self {
             config,
             handle,
+            workers: workers.to_vec(),
             coordinator,
         })
     }
 
-    pub async fn setup(num_workers: usize, worker_capacity: i32) -> Self {
+    pub async fn setup(workers: Vec<CreateWorker>, worker_config: MockWorkerConfig) -> Self {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .try_init();
 
-        let cluster = Cluster::start(ClusterConfig {
-            num_workers,
+        let num_workers = workers.len();
+
+        let cluster = Cluster::start(&workers, ClusterConfig {
+            worker_config,
             ..Default::default()
         })
             .await
             .unwrap();
 
-        for i in 1..=num_workers {
-            let host = NetworkAddr::new(format!("192.168.2.{i}"), 9090);
-            let grpc = NetworkAddr::new(format!("192.168.2.{i}"), 8080);
+        for worker in &workers {
             let result: anyhow::Result<model::worker::Model> =
-                cluster.send(CreateWorker::new(host, grpc, worker_capacity)).await;
+                cluster.send(worker.clone()).await;
             result.unwrap();
         }
 
@@ -138,6 +181,18 @@ impl Cluster {
         }
 
         cluster
+    }
+
+    pub fn num_workers(&self) -> usize {
+        self.workers.len()
+    }
+
+    pub fn worker_name(&self, index: usize) -> String {
+        format!("worker-{}", index + 1)
+    }
+
+    pub fn worker_host(&self, index: usize) -> NetworkAddr {
+        self.workers[index].host_addr.clone()
     }
 
     pub async fn send<P, R>(&self, payload: P) -> R
@@ -179,16 +234,18 @@ impl Cluster {
         (coordinator_handle, node_handle)
     }
 
-    fn start_workers(net: &Handle, config: &ClusterConfig) {
-        for i in 1..=config.num_workers {
-            let worker_config = config.worker_config.clone();
+    fn start_workers(net: &Handle, workers: &[CreateWorker], worker_config: &MockWorkerConfig) {
+        for (i, worker) in workers.iter().enumerate() {
+            let idx = i + 1;
+            let ip = worker.host_addr.host.clone();
+            let wc = worker_config.clone();
             net.create_node()
-                .name(format!("worker-{i}"))
-                .ip(format!("192.168.2.{i}").parse().unwrap())
+                .name(format!("worker-{idx}"))
+                .ip(ip.parse().unwrap())
                 .init(move || {
-                    let wc = worker_config.clone();
+                    let wc = wc.clone();
                     async move {
-                        info!("worker-{i} starting");
+                        info!("worker-{idx} starting");
                         let worker = SingleNodeWorker::new(wc);
                         let svc = WorkerRpcServiceServer::new(worker);
 
@@ -206,9 +263,9 @@ impl Cluster {
 
     pub async fn kill_node(&self, opts: &KillOpts) {
         let mut nodes = vec![];
-        for i in 1..=self.config.num_workers {
+        for i in 0..self.workers.len() {
             if thread_rng().gen_bool(opts.kill_rate as f64) {
-                nodes.push(format!("worker-{}", i));
+                nodes.push(self.worker_name(i));
             }
         }
         if !nodes.is_empty() {

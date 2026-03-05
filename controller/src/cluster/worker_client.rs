@@ -71,8 +71,6 @@ pub(crate) struct WorkerClient {
 }
 
 impl WorkerClient {
-    const RPC_TIMEOUT: Duration = Duration::from_secs(5);
-    pub const CONNECT_TIMEOUT: Duration = CONNECT_TIMEOUT;
     const ENDPOINT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
     const ENDPOINT_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -88,10 +86,10 @@ impl WorkerClient {
 
         let endpoint = Endpoint::from_shared(format!("http://{}", grpc_addr))
             .map_err(|e| WorkerClientErr::Connection(e, grpc_addr.clone()))?
-            .timeout(Self::RPC_TIMEOUT)
+            .timeout(RPC_TIMEOUT)
             .http2_keep_alive_interval(Self::ENDPOINT_KEEP_ALIVE_INTERVAL)
             .keep_alive_timeout(Self::ENDPOINT_KEEP_ALIVE_TIMEOUT)
-            .connect_timeout(Self::CONNECT_TIMEOUT);
+            .connect_timeout(CONNECT_TIMEOUT);
 
         let channel = Retry::spawn(connect_retry_strategy(), || async {
             endpoint.connect().await.map_err(|e| {
@@ -208,6 +206,7 @@ impl WorkerClient {
     }
 }
 
+pub const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CONNECT_INITIAL_BACKOFF_MS: u64 = 100;
 pub const CONNECT_MAX_RETRIES: usize = 8;

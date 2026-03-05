@@ -1,4 +1,6 @@
 #[allow(dead_code)]
 mod worker;
 mod cluster;
-mod failpoints;
+mod utils;
+mod lifecycle;
+mod recovery;

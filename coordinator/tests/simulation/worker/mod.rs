@@ -71,7 +71,7 @@ struct QueryFragment {
 
 #[derive(Default, Debug, Clone)]
 pub struct MockWorkerConfig {
-    pub rpc_delay: Option<(Duration, Duration)>,
+    pub max_rpc_delay: Option<Duration>,
     pub internal_error_rate: f32,
 }
 
@@ -121,8 +121,9 @@ impl SingleNodeWorker {
     }
 
     async fn inject_fault(&self) -> Result<(), Status> {
-        if let Some((min, max)) = self.config.rpc_delay {
-            let delay = thread_rng().gen_range(min..=max);
+        if let Some(max) = self.config.max_rpc_delay {
+            let u: f64 = thread_rng().gen_range(0.0..1.0);
+            let delay = max.mul_f64(u.powi(10));
             tokio::time::sleep(delay).await;
         }
         if thread_rng().gen_range(0.0..1.0) < self.config.internal_error_rate {

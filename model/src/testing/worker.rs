@@ -1,6 +1,7 @@
 use crate::worker::CreateWorker;
+use crate::worker::arb_capacity;
 use crate::worker::arb_create_worker;
-use crate::worker::endpoint::HostAddr;
+use crate::worker::endpoint::{HostAddr, NetworkAddr, DEFAULT_DATA_PORT, DEFAULT_GRPC_PORT};
 use proptest::prelude::*;
 
 fn arb_n_unique_workers(n: usize) -> impl Strategy<Value = Vec<CreateWorker>> {
@@ -14,6 +15,25 @@ fn arb_n_unique_workers(n: usize) -> impl Strategy<Value = Vec<CreateWorker>> {
                 w
             })
             .collect()
+    })
+}
+
+const MAX_SIM_WORKERS: u8 = 32;
+
+pub fn arb_topology(min_workers: u8) -> impl Strategy<Value = Vec<CreateWorker>> {
+    (min_workers..=MAX_SIM_WORKERS).prop_flat_map(|n| {
+        prop::collection::vec(arb_capacity(), n as usize..=n as usize).prop_map(|capacities| {
+            capacities
+                .into_iter()
+                .enumerate()
+                .map(|(i, capacity)| {
+                    let octet = (i + 1) as u8;
+                    let host = NetworkAddr::new(format!("192.168.2.{octet}"), DEFAULT_DATA_PORT);
+                    let grpc = NetworkAddr::new(format!("192.168.2.{octet}"), DEFAULT_GRPC_PORT);
+                    CreateWorker::new(host, grpc, capacity)
+                })
+                .collect()
+        })
     })
 }
 
