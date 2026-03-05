@@ -1,5 +1,5 @@
 #![cfg(madsim)]
-use crate::cluster::{Cluster, arb_query, arb_topology_min, arb_worker_config, worker_recovery_deadline};
+use crate::cluster::{Cluster, arb_query, arb_topology_min, worker_recovery_deadline};
 use crate::utils::{poll_worker_state, worker_unreachable_deadline};
 use madsim::rand::{Rng, thread_rng};
 use model::query::query_state::QueryState;
@@ -8,7 +8,7 @@ use model::worker::{GetWorker, WorkerState};
 
 #[madsim::test]
 async fn running_query_survives_transient_worker_failure() {
-    let cluster = Cluster::setup(arb_topology_min(2), arb_worker_config()).await;
+    let cluster = Cluster::setup(arb_topology_min(2)).await;
 
     let query: model::query::Model = cluster
         .send(arb_query().block_until(QueryState::Running))
@@ -55,7 +55,7 @@ async fn running_query_survives_transient_worker_failure() {
 
 #[madsim::test]
 async fn worker_killed_becomes_unreachable_and_recovers() {
-    let cluster = Cluster::setup(arb_topology_min(2), arb_worker_config()).await;
+    let cluster = Cluster::setup(arb_topology_min(2)).await;
 
     let kill_idx = thread_rng().gen_range(0..cluster.num_workers());
     let kill_name = cluster.worker_name(kill_idx);

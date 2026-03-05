@@ -1,11 +1,11 @@
 #![cfg(madsim)]
-use crate::cluster::{Cluster, arb_query, arb_topology, arb_worker_config, query_reconciliation_deadline};
+use crate::cluster::{Cluster, arb_query, arb_topology, query_reconciliation_deadline};
 use crate::utils::poll_query_state;
 use model::query::query_state::QueryState;
 
 #[madsim::test]
 async fn recovery_after_pre_register_crash() {
-    let cluster = Cluster::setup(arb_topology(), arb_worker_config()).await;
+    let cluster = Cluster::setup(arb_topology()).await;
 
     fail::cfg(
         "reconciler_pre_register",
@@ -27,7 +27,7 @@ async fn recovery_after_pre_register_crash() {
 
 #[madsim::test]
 async fn recovery_after_pre_start_crash() {
-    let cluster = Cluster::setup(arb_topology(), arb_worker_config()).await;
+    let cluster = Cluster::setup(arb_topology()).await;
 
     fail::cfg("reconciler_pre_start", "1*panic(injected pre-start crash)").unwrap();
 
@@ -45,7 +45,7 @@ async fn recovery_after_pre_start_crash() {
 
 #[madsim::test]
 async fn recovery_after_post_rpc_pre_db_crash() {
-    let cluster = Cluster::setup(arb_topology(), arb_worker_config()).await;
+    let cluster = Cluster::setup(arb_topology()).await;
 
     fail::cfg(
         "reconciler_post_rpc_pre_db",
@@ -67,7 +67,7 @@ async fn recovery_after_post_rpc_pre_db_crash() {
 
 #[madsim::test]
 async fn error_during_create_fragments_fails_query() {
-    let cluster = Cluster::setup(arb_topology(), arb_worker_config()).await;
+    let cluster = Cluster::setup(arb_topology()).await;
 
     fail::cfg("reconciler_create_fragments", "1*return").unwrap();
 

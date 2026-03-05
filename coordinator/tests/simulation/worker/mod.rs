@@ -1,13 +1,13 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use madsim::rand::{Rng, thread_rng};
 use tonic::metadata::MetadataMap;
 use tonic::{Code, Request, Response, Status};
 use tracing::{debug, error, instrument};
 
-use controller::cluster::worker_client::worker_rpc_service;
 use controller::cluster::health_monitor::health_proto;
+use controller::cluster::worker_client::worker_rpc_service;
 
 use worker_rpc_service::worker_rpc_service_server::WorkerRpcService;
 #[allow(unused_imports)]
@@ -69,21 +69,15 @@ struct QueryFragment {
     error: bool,
 }
 
-#[derive(Default, Debug, Clone)]
-pub struct MockWorkerConfig {
-    pub max_rpc_delay: Option<Duration>,
-    pub internal_error_rate: f32,
-}
-
 pub struct SingleNodeWorker {
-    config: MockWorkerConfig,
+    fail_rpcs: Arc<AtomicBool>,
     fragments: Arc<RwLock<HashMap<FragmentId, QueryFragment>>>,
 }
 
 impl SingleNodeWorker {
-    pub fn new(config: MockWorkerConfig) -> Self {
+    pub fn new(fail_rpcs: Arc<AtomicBool>) -> Self {
         Self {
-            config,
+            fail_rpcs,
             fragments: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -91,7 +85,7 @@ impl SingleNodeWorker {
     fn current_timestamp_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+            .unwrap_or_else(|_| Duration::from_secs(0))
             .as_millis() as u64
     }
 
@@ -120,13 +114,8 @@ impl SingleNodeWorker {
         }
     }
 
-    async fn inject_fault(&self) -> Result<(), Status> {
-        if let Some(max) = self.config.max_rpc_delay {
-            let u: f64 = thread_rng().gen_range(0.0..1.0);
-            let delay = max.mul_f64(u.powi(10));
-            tokio::time::sleep(delay).await;
-        }
-        if thread_rng().gen_range(0.0..1.0) < self.config.internal_error_rate {
+    fn inject_fault(&self) -> Result<(), Status> {
+        if self.fail_rpcs.load(Ordering::Relaxed) {
             let mut metadata = MetadataMap::new();
             metadata.insert("code", "0".parse().unwrap());
             metadata.insert("what", "internal error".parse().unwrap());
@@ -150,10 +139,13 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<RegisterQueryRequest>,
     ) -> Result<Response<RegisterQueryReply>, Status> {
-        self.inject_fault().await?;
+        self.inject_fault()?;
 
         let id = request.get_ref().query_id;
-        self.fragments.write().unwrap().insert(id, QueryFragment::default());
+        self.fragments
+            .write()
+            .unwrap()
+            .insert(id, QueryFragment::default());
 
         debug!("Registered new query: {}", id);
         Ok(Response::new(RegisterQueryReply {}))
@@ -164,7 +156,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<UnregisterQueryRequest>,
     ) -> Result<Response<()>, Status> {
-        self.inject_fault().await?;
+        self.inject_fault()?;
         let query_id = request.get_ref().query_id;
         match self.fragments.write().unwrap().remove(&query_id) {
             Some(_) => {
@@ -180,7 +172,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<StartQueryRequest>,
     ) -> Result<Response<()>, Status> {
-        self.inject_fault().await?;
+        self.inject_fault()?;
         let query_id = request.get_ref().query_id;
         self.with_query_mut(query_id, |query| {
             query.state = QueryFragmentState::Running;
@@ -192,7 +184,7 @@ impl WorkerRpcService for SingleNodeWorker {
 
     #[instrument(skip(self), fields(query_id = %request.get_ref().query_id))]
     async fn stop_query(&self, request: Request<StopQueryRequest>) -> Result<Response<()>, Status> {
-        self.inject_fault().await?;
+        self.inject_fault()?;
         let query_id = request.get_ref().query_id;
         self.with_query_mut(query_id, |query| {
             query.state = QueryFragmentState::Stopped;
@@ -207,10 +199,10 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<QueryStatusRequest>,
     ) -> Result<Response<QueryStatusReply>, Status> {
-        self.inject_fault().await?;
+        self.inject_fault()?;
         let query_id = request.get_ref().query_id;
         let reply = self.with_query(query_id, |query| QueryStatusReply {
-            query_id: query_id.clone(),
+            query_id,
             state: query.state.clone().into(),
             metrics: None,
         })?;
@@ -222,7 +214,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<QueryLogRequest>,
     ) -> Result<Response<QueryLogReply>, Status> {
-        self.inject_fault().await?;
+        self.inject_fault()?;
         let _ = request;
         Ok(Response::new(QueryLogReply { entries: vec![] }))
     }
@@ -232,7 +224,7 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<WorkerStatusRequest>,
     ) -> Result<Response<WorkerStatusResponse>, Status> {
-        self.inject_fault().await?;
+        self.inject_fault()?;
         let queries = self.fragments.read().unwrap();
         let (terminated, active): (Vec<_>, Vec<_>) = queries.iter().partition(|(_, query)| {
             query.state == QueryFragmentState::Failed || query.state == QueryFragmentState::Stopped
@@ -241,7 +233,7 @@ impl WorkerRpcService for SingleNodeWorker {
         let active_queries = active
             .into_iter()
             .map(|(id, query)| ActiveQuery {
-                query_id: id.clone(),
+                query_id: *id,
                 started_unix_timestamp_in_ms: query.started,
             })
             .collect();
@@ -249,7 +241,7 @@ impl WorkerRpcService for SingleNodeWorker {
         let terminated_queries = terminated
             .into_iter()
             .map(|(id, query)| TerminatedQuery {
-                query_id: id.clone(),
+                query_id: *id,
                 started_unix_timestamp_in_ms: query.started,
                 terminated_unix_timestamp_in_ms: query.terminated,
                 error: None,

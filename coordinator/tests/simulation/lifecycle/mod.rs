@@ -1,12 +1,12 @@
 #![cfg(madsim)]
-use crate::cluster::{Cluster, arb_query, arb_topology, arb_worker_config, query_reconciliation_deadline};
+use crate::cluster::{Cluster, arb_query, arb_topology, query_reconciliation_deadline};
 use crate::utils::poll_query_state;
 use model::query::query_state::QueryState;
 use model::query::{DropQuery, GetQuery, StopMode};
 
 #[madsim::test]
 async fn query_lifecycle() {
-    let cluster = Cluster::setup(arb_topology(), arb_worker_config()).await;
+    let cluster = Cluster::setup(arb_topology()).await;
 
     let query: model::query::Model = cluster
         .send(arb_query().block_until(QueryState::Running))
@@ -41,7 +41,7 @@ async fn query_lifecycle() {
 
 #[madsim::test]
 async fn drop_query_gracefully() {
-    let cluster = Cluster::setup(arb_topology(), arb_worker_config()).await;
+    let cluster = Cluster::setup(arb_topology()).await;
 
     let query: model::query::Model = cluster
         .send(arb_query().block_until(QueryState::Running))
@@ -67,7 +67,7 @@ async fn drop_query_gracefully() {
 
 #[madsim::test]
 async fn drop_query_before_running() {
-    let cluster = Cluster::setup(arb_topology(), arb_worker_config()).await;
+    let cluster = Cluster::setup(arb_topology()).await;
 
     let query: model::query::Model = cluster
         .send(arb_query().block_until(QueryState::Pending))
@@ -92,7 +92,7 @@ async fn drop_query_before_running() {
 
 #[madsim::test]
 async fn non_blocking_create_reconciles_to_running() {
-    let cluster = Cluster::setup(arb_topology(), arb_worker_config()).await;
+    let cluster = Cluster::setup(arb_topology()).await;
 
     let created: model::query::Model = cluster
         .send(arb_query().block_until(QueryState::Pending))

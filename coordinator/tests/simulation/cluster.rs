@@ -1,9 +1,12 @@
 #![cfg(madsim)]
-use crate::worker::{HealthServer, HealthServiceImpl, MockWorkerConfig, SingleNodeWorker, WorkerRpcServiceServer};
+use crate::worker::{HealthServer, HealthServiceImpl, SingleNodeWorker, WorkerRpcServiceServer};
 use anyhow::Result;
 use controller::cluster::service::CLUSTER_SERVICE_POLLING_DURATION;
 use controller::cluster::worker_client::{CONNECT_INITIAL_BACKOFF_MS, CONNECT_MAX_RETRIES, CONNECT_TIMEOUT, RPC_TIMEOUT};
 use controller::query::MAX_RPC_ATTEMPTS;
+use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use controller::query::service::QUERY_SERVICE_POLLING_DURATION;
 use controller::request::Request;
 use coordinator::coordinator::{CoordinatorRequest, start_for_test};
@@ -32,14 +35,16 @@ pub struct KillOpts {
 #[derive(Debug, Clone)]
 pub struct ClusterConfig {
     pub kill_opts: KillOpts,
-    pub worker_config: MockWorkerConfig,
+    pub send_latency: Range<Duration>,
+    pub packet_loss_rate: f64,
 }
 
 impl Default for ClusterConfig {
     fn default() -> Self {
         ClusterConfig {
             kill_opts: Default::default(),
-            worker_config: Default::default(),
+            send_latency: Duration::from_millis(1)..Duration::from_millis(10),
+            packet_loss_rate: 0.0,
         }
     }
 }
@@ -106,19 +111,11 @@ pub fn arb_topology_min(min: u8) -> Vec<CreateWorker> {
         .current()
 }
 
-pub fn arb_worker_config() -> MockWorkerConfig {
-    let max_delay_ms = MAX_RPC_ATTEMPTS as u64 * RPC_TIMEOUT.as_millis() as u64;
-    let max: u64 = thread_rng().gen_range(0..=max_delay_ms);
-    MockWorkerConfig {
-        max_rpc_delay: Some(Duration::from_millis(max)),
-        internal_error_rate: 0.0,
-    }
-}
-
 pub struct Cluster {
     pub config: ClusterConfig,
     pub handle: Handle,
     workers: Vec<CreateWorker>,
+    worker_fail_flags: Vec<Arc<AtomicBool>>,
     coordinator: (flume::Sender<CoordinatorRequest>, NodeHandle),
 }
 
@@ -126,28 +123,31 @@ impl Cluster {
     pub async fn start(workers: &[CreateWorker], config: ClusterConfig) -> Result<Self> {
         let handle = madsim::runtime::Handle::current();
 
-        Self::start_workers(&handle, workers, &config.worker_config);
+        madsim::net::NetSim::current().update_config(|cfg| {
+            cfg.send_latency = config.send_latency.clone();
+            cfg.packet_loss_rate = config.packet_loss_rate;
+        });
+
+        let worker_fail_flags = Self::start_workers(&handle, workers);
         let coordinator = Self::start_coordinator(&handle).await;
 
         Ok(Self {
             config,
             handle,
             workers: workers.to_vec(),
+            worker_fail_flags,
             coordinator,
         })
     }
 
-    pub async fn setup(workers: Vec<CreateWorker>, worker_config: MockWorkerConfig) -> Self {
+    pub async fn setup(workers: Vec<CreateWorker>) -> Self {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .try_init();
 
         let num_workers = workers.len();
 
-        let cluster = Cluster::start(&workers, ClusterConfig {
-            worker_config,
-            ..Default::default()
-        })
+        let cluster = Cluster::start(&workers, ClusterConfig::default())
             .await
             .unwrap();
 
@@ -233,31 +233,45 @@ impl Cluster {
         (coordinator_handle, node_handle)
     }
 
-    fn start_workers(net: &Handle, workers: &[CreateWorker], worker_config: &MockWorkerConfig) {
-        for (i, worker) in workers.iter().enumerate() {
-            let idx = i + 1;
-            let ip = worker.host_addr.host.clone();
-            let wc = worker_config.clone();
-            net.create_node()
-                .name(format!("worker-{idx}"))
-                .ip(ip.parse().unwrap())
-                .init(move || {
-                    let wc = wc.clone();
-                    async move {
-                        info!("worker-{idx} starting");
-                        let worker = SingleNodeWorker::new(wc);
-                        let svc = WorkerRpcServiceServer::new(worker);
+    fn start_workers(net: &Handle, workers: &[CreateWorker]) -> Vec<Arc<AtomicBool>> {
+        workers
+            .iter()
+            .enumerate()
+            .map(|(i, worker)| {
+                let idx = i + 1;
+                let ip = worker.host_addr.host.clone();
+                let fail_flag = Arc::new(AtomicBool::new(false));
+                let flag = fail_flag.clone();
+                net.create_node()
+                    .name(format!("worker-{idx}"))
+                    .ip(ip.parse().unwrap())
+                    .init(move || {
+                        let flag = flag.clone();
+                        async move {
+                            info!("worker-{idx} starting");
+                            let worker = SingleNodeWorker::new(flag);
+                            let svc = WorkerRpcServiceServer::new(worker);
 
-                        Server::builder()
-                            .add_service(svc)
-                            .add_service(HealthServer::new(HealthServiceImpl))
-                            .serve("0.0.0.0:8080".parse().unwrap())
-                            .await
-                            .expect("Worker could not be started");
-                    }
-                })
-                .build();
-        }
+                            Server::builder()
+                                .add_service(svc)
+                                .add_service(HealthServer::new(HealthServiceImpl))
+                                .serve("0.0.0.0:8080".parse().unwrap())
+                                .await
+                                .expect("Worker could not be started");
+                        }
+                    })
+                    .build();
+                fail_flag
+            })
+            .collect()
+    }
+
+    pub fn fail_worker(&self, index: usize) {
+        self.worker_fail_flags[index].store(true, Ordering::Relaxed);
+    }
+
+    pub fn recover_worker(&self, index: usize) {
+        self.worker_fail_flags[index].store(false, Ordering::Relaxed);
     }
 
     pub async fn kill_node(&self, opts: &KillOpts) {
