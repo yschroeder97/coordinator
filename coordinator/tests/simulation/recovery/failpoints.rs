@@ -82,6 +82,4 @@ async fn error_during_create_fragments_fails_query() {
     .await;
     assert_eq!(query.current_state, QueryState::Failed);
     assert!(query.error.is_some());
-
-    fail::remove("reconciler_create_fragments");
 }
