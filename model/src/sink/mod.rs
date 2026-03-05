@@ -6,6 +6,7 @@ use sea_orm::entity::prelude::*;
 use sea_orm::{Condition, Set};
 use serde::{Deserialize, Serialize};
 use strum::Display;
+use crate::worker::CreateWorker;
 
 pub type SinkName = String;
 
@@ -149,4 +150,35 @@ impl crate::IntoCondition for DropSink {
 pub enum SinkType {
     File,
     Print,
+}
+
+#[cfg(feature = "testing")]
+#[derive(Debug, Clone)]
+pub struct SinkWithRefs {
+    pub worker: CreateWorker,
+    pub sink: CreateSink,
+}
+
+#[cfg(feature = "testing")]
+impl crate::Generate for SinkWithRefs {
+    fn generate() -> proptest::strategy::BoxedStrategy<Self> {
+        use proptest::prelude::*;
+        (
+            proptest::string::string_regex("[a-z][a-z0-9_]{2,29}").unwrap(),
+            CreateWorker::generate(),
+            any::<SinkType>(),
+            any::<Schema>(),
+        )
+            .prop_map(|(name, worker, sink_type, schema)| {
+                let sink = CreateSink {
+                    name,
+                    host_addr: worker.host_addr.clone(),
+                    sink_type,
+                    schema,
+                    config: serde_json::json!({}),
+                };
+                SinkWithRefs { worker, sink }
+            })
+            .boxed()
+    }
 }

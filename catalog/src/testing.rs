@@ -3,7 +3,7 @@ use model::query;
 use model::query::fragment::{self, CreateFragment, FragmentState};
 use model::query::query_state::QueryState;
 use model::query::GetQuery;
-use model::testing::ValidFragments;
+use model::query::fragment::ValidFragments;
 use sea_orm::ActiveValue::Set;
 use std::future::Future;
 use std::sync::Arc;

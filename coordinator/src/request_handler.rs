@@ -243,7 +243,7 @@ mod tests {
     use catalog::testing::{advance_query_to, test_prop};
     use model::query::query_state::QueryState;
     use model::query::{CreateQuery, DropQuery, GetQuery, StopMode};
-    use model::testing::{arb_create_query, arb_valid_state_path};
+    use model::Generate;
     use model::worker::CreateWorker;
     use model::worker::endpoint::NetworkAddr;
     use proptest::prelude::*;
@@ -375,7 +375,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn non_blocking_create_returns_pending(req in arb_create_query()) {
+        fn non_blocking_create_returns_pending(req in CreateQuery::generate()) {
             let req = CreateQuery { block_until: QueryState::Pending, ..req };
             test_prop(|| async move {
                 prop_non_blocking_create_returns_pending(req).await;
@@ -390,7 +390,7 @@ mod tests {
                 Just(QueryState::Running),
                 Just(QueryState::Completed),
             ],
-            path in arb_valid_state_path(),
+            path in <Vec<QueryState> as Generate>::generate(),
         ) {
             test_prop(|| async move {
                 prop_blocking_create_resolves_correctly(block_until, path).await;

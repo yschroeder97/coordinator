@@ -14,24 +14,6 @@ use sea_orm::{
     ColIdx, ColumnType, DbErr, QueryResult, TryFromU64, TryGetError, TryGetable, Value, sea_query,
 };
 
-#[cfg(feature = "testing")]
-fn arb_host_name() -> impl proptest::prelude::Strategy<Value = String> {
-    use proptest::prelude::*;
-    prop_oneof![
-        Just("localhost".to_string()),
-        Just("127.0.0.1".to_string()),
-        (0..255u8, 0..255u8, 0..255u8, 0..255u8)
-            .prop_map(|(a, b, c, d)| format!("{}.{}.{}.{}", a, b, c, d)),
-        proptest::string::string_regex("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?").unwrap()
-    ]
-}
-
-#[cfg(feature = "testing")]
-pub fn arb_host_addr() -> impl proptest::prelude::Strategy<Value = HostAddr> {
-    use proptest::prelude::*;
-    (arb_host_name(), 1024..65535u16).prop_map(|(host, port)| NetworkAddr::new(host, port))
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct NetworkAddr {
     pub host: HostName,
@@ -125,5 +107,22 @@ impl FromStr for NetworkAddr {
 impl<'a> From<&'a str> for NetworkAddr {
     fn from(s: &'a str) -> Self {
         NetworkAddr::from_str(s).expect("Invalid NetworkAddr string")
+    }
+}
+
+#[cfg(feature = "testing")]
+impl crate::Generate for NetworkAddr {
+    fn generate() -> proptest::strategy::BoxedStrategy<Self> {
+        use proptest::prelude::*;
+        let host_name = prop_oneof![
+            Just("localhost".to_string()),
+            Just("127.0.0.1".to_string()),
+            (0..255u8, 0..255u8, 0..255u8, 0..255u8)
+                .prop_map(|(a, b, c, d)| format!("{}.{}.{}.{}", a, b, c, d)),
+            proptest::string::string_regex("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?").unwrap()
+        ];
+        (host_name, 1024..65535u16)
+            .prop_map(|(host, port)| NetworkAddr::new(host, port))
+            .boxed()
     }
 }

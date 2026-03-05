@@ -16,7 +16,7 @@ impl Transition for Pending {
         let requests = {
             use model::worker::GetWorker;
             let workers = ctx.catalog.worker.get_worker(GetWorker::all()).await?;
-            model::testing::arb_create_fragments(&ctx.query, &workers)
+            model::query::fragment::CreateFragment::for_models(&ctx.query, &workers)
         };
         #[cfg(not(feature = "testing"))]
         let requests: Vec<model::query::fragment::CreateFragment> = Vec::new();

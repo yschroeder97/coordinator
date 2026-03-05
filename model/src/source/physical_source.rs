@@ -155,3 +155,38 @@ pub enum SourceType {
     File,
     Tcp,
 }
+
+#[cfg(feature = "testing")]
+#[derive(Debug, Clone)]
+pub struct PhysicalSourceWithRefs {
+    pub logical: super::logical_source::CreateLogicalSource,
+    pub worker: crate::worker::CreateWorker,
+    pub physical: CreatePhysicalSource,
+}
+
+#[cfg(feature = "testing")]
+impl crate::Generate for PhysicalSourceWithRefs {
+    fn generate() -> proptest::strategy::BoxedStrategy<Self> {
+        use proptest::prelude::*;
+        (
+            any::<super::logical_source::CreateLogicalSource>(),
+            crate::worker::CreateWorker::generate(),
+            any::<SourceType>(),
+        )
+            .prop_map(|(logical, worker, source_type)| {
+                let physical = CreatePhysicalSource {
+                    logical_source: logical.name.clone(),
+                    host_addr: worker.host_addr.clone(),
+                    source_type,
+                    source_config: serde_json::json!({}),
+                    parser_config: serde_json::json!({}),
+                };
+                PhysicalSourceWithRefs {
+                    logical,
+                    worker,
+                    physical,
+                }
+            })
+            .boxed()
+    }
+}

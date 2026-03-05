@@ -10,9 +10,8 @@ use coordinator::coordinator::{CoordinatorRequest, start_for_test};
 use futures::future::join_all;
 use madsim::rand::{Rng, thread_rng};
 use madsim::runtime::{Handle, NodeHandle};
+use model::Generate;
 use model::query::CreateQuery;
-use model::query::arb_create_query;
-use model::testing::arb_topology as arb_topology_strategy;
 use model::worker::endpoint::NetworkAddr;
 use model::worker::{CreateWorker, GetWorker, WorkerState};
 use proptest::strategy::{Strategy, ValueTree};
@@ -86,7 +85,7 @@ fn madsim_test_runner() -> TestRunner {
 
 pub fn arb_query() -> CreateQuery {
     use model::query::query_state::QueryState;
-    arb_create_query()
+    CreateQuery::generate()
         .new_tree(&mut madsim_test_runner())
         .unwrap()
         .current()
@@ -94,14 +93,14 @@ pub fn arb_query() -> CreateQuery {
 }
 
 pub fn arb_topology() -> Vec<CreateWorker> {
-    arb_topology_strategy(1)
+    <Vec<CreateWorker>>::generate()
         .new_tree(&mut madsim_test_runner())
         .unwrap()
         .current()
 }
 
 pub fn arb_topology_min(min: u8) -> Vec<CreateWorker> {
-    arb_topology_strategy(min)
+    CreateWorker::topology(min)
         .new_tree(&mut madsim_test_runner())
         .unwrap()
         .current()

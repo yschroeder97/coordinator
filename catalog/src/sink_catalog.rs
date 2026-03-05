@@ -44,7 +44,8 @@ mod tests {
     use super::*;
     use crate::Catalog;
     use crate::testing::test_prop;
-    use model::testing::{SinkWithRefs, arb_sink_with_refs};
+    use model::Generate;
+    use model::sink::SinkWithRefs;
     use proptest::proptest;
 
     async fn prop_create_and_get_sink(req: SinkWithRefs) {
@@ -173,35 +174,35 @@ mod tests {
 
     proptest! {
         #[test]
-        fn create_and_get_sink(req in arb_sink_with_refs()) {
+        fn create_and_get_sink(req in SinkWithRefs::generate()) {
             test_prop(|| async move {
                 prop_create_and_get_sink(req).await;
             });
         }
 
         #[test]
-        fn drop_sink(req in arb_sink_with_refs()) {
+        fn drop_sink(req in SinkWithRefs::generate()) {
             test_prop(|| async move {
                 prop_drop_sink(req).await;
             });
         }
 
         #[test]
-        fn sink_name_unique(req in arb_sink_with_refs()) {
+        fn sink_name_unique(req in SinkWithRefs::generate()) {
             test_prop(|| async move {
                 prop_sink_name_unique(req).await;
             });
         }
 
         #[test]
-        fn sink_worker_ref_required(req in arb_sink_with_refs()) {
+        fn sink_worker_ref_required(req in SinkWithRefs::generate()) {
             test_prop(|| async move {
                 prop_sink_worker_ref_required(req).await;
             });
         }
 
         #[test]
-        fn create_drop_create_sink_succeeds(req in arb_sink_with_refs()) {
+        fn create_drop_create_sink_succeeds(req in SinkWithRefs::generate()) {
             test_prop(|| async move {
                 prop_create_drop_create_sink(req).await;
             });

@@ -159,29 +159,115 @@ impl DropWorker {
 }
 
 #[cfg(feature = "testing")]
-pub(crate) fn arb_capacity() -> impl proptest::prelude::Strategy<Value = i32> {
-    use proptest::prelude::*;
-    prop_oneof![
-        1 => Just(0i32),
-        5 => 1..=16i32,
-        3 => 17..=128i32,
-        1 => 129..=1024i32,
-    ]
+impl crate::Generate for CreateWorker {
+    fn generate() -> proptest::strategy::BoxedStrategy<Self> {
+        use proptest::prelude::*;
+        (
+            endpoint::NetworkAddr::generate(),
+            1024..65535u16,
+            Self::arb_capacity(),
+        )
+            .prop_map(|(host_addr, grpc_port, capacity)| {
+                let grpc_port = if grpc_port == host_addr.port {
+                    if grpc_port < 65534 { grpc_port + 1 } else { grpc_port - 1 }
+                } else {
+                    grpc_port
+                };
+                let grpc_addr = endpoint::NetworkAddr::new(host_addr.host.clone(), grpc_port);
+                CreateWorker::new(host_addr, grpc_addr, capacity)
+            })
+            .boxed()
+    }
 }
 
 #[cfg(feature = "testing")]
-proptest::prop_compose! {
-    pub fn arb_create_worker()(
-        host_addr in endpoint::arb_host_addr(),
-        grpc_port in 1024..65535u16,
-        capacity in arb_capacity(),
-    ) -> CreateWorker {
-        let grpc_port = if grpc_port == host_addr.port {
-            if grpc_port < 65534 { grpc_port + 1 } else { grpc_port - 1 }
-        } else {
-            grpc_port
-        };
-        let grpc_addr = endpoint::NetworkAddr::new(host_addr.host.clone(), grpc_port);
-        CreateWorker::new(host_addr, grpc_addr, capacity)
+impl CreateWorker {
+    fn arb_capacity() -> impl proptest::prelude::Strategy<Value = i32> {
+        use proptest::prelude::*;
+        prop_oneof![
+            1 => Just(0i32),
+            5 => 1..=16i32,
+            3 => 17..=128i32,
+            1 => 129..=1024i32,
+        ]
+    }
+
+    pub fn topology(min_workers: u8) -> proptest::strategy::BoxedStrategy<Vec<CreateWorker>> {
+        use proptest::prelude::*;
+        const MAX_SIM_WORKERS: u8 = 32;
+        (min_workers..=MAX_SIM_WORKERS)
+            .prop_flat_map(|n| {
+                prop::collection::vec(Self::arb_capacity(), n as usize..=n as usize).prop_map(
+                    |capacities| {
+                        capacities
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, capacity)| {
+                                let octet = (i + 1) as u8;
+                                let host = endpoint::NetworkAddr::new(
+                                    format!("192.168.2.{octet}"),
+                                    endpoint::DEFAULT_DATA_PORT,
+                                );
+                                let grpc = endpoint::NetworkAddr::new(
+                                    format!("192.168.2.{octet}"),
+                                    endpoint::DEFAULT_GRPC_PORT,
+                                );
+                                CreateWorker::new(host, grpc, capacity)
+                            })
+                            .collect()
+                    },
+                )
+            })
+            .boxed()
+    }
+
+    pub fn dag_topology(
+        max_workers: usize,
+    ) -> proptest::strategy::BoxedStrategy<Vec<CreateWorker>> {
+        use crate::Generate as _;
+        use proptest::prelude::*;
+        (2..=max_workers)
+            .prop_flat_map(|n| {
+                let max_edges = n * (n - 1) / 2;
+                (
+                    prop::collection::vec(CreateWorker::generate(), n..=n).prop_map(|workers| {
+                        workers
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, mut w)| {
+                                w.host_addr.port = 10000 + i as u16;
+                                w.grpc_addr.port = 20000 + i as u16;
+                                w
+                            })
+                            .collect::<Vec<_>>()
+                    }),
+                    prop::collection::vec(any::<bool>(), max_edges..=max_edges),
+                )
+                    .prop_map(|(mut workers, flags)| {
+                        let mut peers_per_worker: Vec<Vec<endpoint::HostAddr>> =
+                            vec![Vec::new(); workers.len()];
+                        let mut idx = 0;
+                        for i in 0..workers.len() {
+                            for j in (i + 1)..workers.len() {
+                                if flags[idx] {
+                                    peers_per_worker[i].push(workers[j].host_addr.clone());
+                                }
+                                idx += 1;
+                            }
+                        }
+                        for (i, peers) in peers_per_worker.into_iter().enumerate() {
+                            workers[i].peers = peers;
+                        }
+                        workers
+                    })
+            })
+            .boxed()
+    }
+}
+
+#[cfg(feature = "testing")]
+impl crate::Generate for Vec<CreateWorker> {
+    fn generate() -> proptest::strategy::BoxedStrategy<Self> {
+        CreateWorker::topology(1)
     }
 }

@@ -108,3 +108,23 @@ impl QueryState {
             .collect()
     }
 }
+
+#[cfg(feature = "testing")]
+impl crate::Generate for Vec<QueryState> {
+    fn generate() -> proptest::strategy::BoxedStrategy<Self> {
+        use proptest::prelude::*;
+        use QueryState::*;
+        prop_oneof![
+            Just(vec![Pending, Planned, Registered, Running, Completed]),
+            Just(vec![Pending, Planned, Registered, Running, Stopped]),
+            Just(vec![Pending, Planned, Registered, Running, Failed]),
+            Just(vec![Pending, Planned, Registered, Stopped]),
+            Just(vec![Pending, Planned, Registered, Failed]),
+            Just(vec![Pending, Planned, Stopped]),
+            Just(vec![Pending, Planned, Failed]),
+            Just(vec![Pending, Stopped]),
+            Just(vec![Pending, Failed]),
+        ]
+        .boxed()
+    }
+}

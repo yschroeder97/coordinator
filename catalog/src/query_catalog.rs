@@ -354,9 +354,8 @@ mod tests {
     use model::query::StopMode;
     use model::query::fragment::{FragmentError, FragmentId, FragmentState};
     use model::query::query_state::QueryState;
-    use model::testing::{
-        arb_create_query, arb_create_worker, arb_fragment_setup, arb_valid_state_path,
-    };
+    use model::Generate;
+    use model::query::fragment::ValidFragments;
     use model::worker::{CreateWorker, GetWorker};
     use proptest::prelude::*;
     use sea_orm::sqlx::types::chrono;
@@ -522,7 +521,7 @@ mod tests {
 
     async fn prop_fragment_creation_reserves_capacity(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -566,7 +565,7 @@ mod tests {
 
     async fn prop_capacity_released_on_fragment_terminal(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
         terminal_state: FragmentState,
     ) {
         let catalog = Catalog::for_test().await;
@@ -630,7 +629,7 @@ mod tests {
 
     async fn prop_query_state_path_valid(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
         path: Vec<QueryState>,
     ) {
         let catalog = Catalog::for_test().await;
@@ -655,7 +654,7 @@ mod tests {
 
     async fn prop_terminal_state_preserves_identity(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
         path: Vec<QueryState>,
     ) {
         let catalog = Catalog::for_test().await;
@@ -673,7 +672,7 @@ mod tests {
 
     async fn prop_invalid_transitions_rejected(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
         path: Vec<QueryState>,
     ) {
         let catalog = Catalog::for_test().await;
@@ -711,7 +710,7 @@ mod tests {
 
     async fn prop_fragments_stored_with_correct_defaults(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -749,7 +748,7 @@ mod tests {
         }
     }
 
-    async fn prop_fragments_reject_missing_query(setup: model::testing::ValidFragments) {
+    async fn prop_fragments_reject_missing_query(setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -779,7 +778,7 @@ mod tests {
 
     async fn prop_fragments_reject_missing_worker(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
     ) {
         let catalog = Catalog::for_test().await.query.clone();
         let created_query = catalog.create_query(req).await.unwrap();
@@ -796,7 +795,7 @@ mod tests {
 
     async fn prop_capacity_conserved_on_fragment_terminal(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
         terminal_state: FragmentState,
     ) {
         let catalog = Catalog::for_test().await;
@@ -857,7 +856,7 @@ mod tests {
 
     async fn prop_fail_query_from_non_terminal(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
         path: Vec<QueryState>,
         error_msg: String,
     ) {
@@ -893,7 +892,7 @@ mod tests {
 
     async fn prop_fail_query_from_terminal_rejected(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
         path: Vec<QueryState>,
     ) {
         let catalog = Catalog::for_test().await;
@@ -918,7 +917,7 @@ mod tests {
 
     async fn prop_update_fragment_states_applied(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
         target_state: FragmentState,
     ) {
         let catalog = Catalog::for_test().await;
@@ -950,7 +949,7 @@ mod tests {
 
     async fn prop_update_fragment_states_partial(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
         target_state: FragmentState,
     ) {
         let catalog = Catalog::for_test().await;
@@ -1010,7 +1009,7 @@ mod tests {
 
     async fn prop_get_mismatch_query_correctness(
         queries: Vec<CreateQuery>,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1062,7 +1061,7 @@ mod tests {
 
     async fn prop_create_fragments_transitions_to_planned(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1091,7 +1090,7 @@ mod tests {
 
     async fn prop_fragment_state_derives_query_state(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1158,7 +1157,7 @@ mod tests {
 
     async fn prop_one_failed_fragment_fails_query(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1213,7 +1212,7 @@ mod tests {
 
     async fn prop_worker_internal_error_aggregated(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1265,7 +1264,7 @@ mod tests {
 
     async fn prop_all_fragments_failed_errors_aggregated(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1340,7 +1339,7 @@ mod tests {
             .with_timezone(&chrono::Local)
     }
 
-    async fn prop_timestamps_propagated(req: CreateQuery, setup: model::testing::ValidFragments) {
+    async fn prop_timestamps_propagated(req: CreateQuery, setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -1434,7 +1433,7 @@ mod tests {
 
     async fn prop_get_fragments_returns_created(
         req: CreateQuery,
-        setup: model::testing::ValidFragments,
+        setup: ValidFragments,
     ) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
@@ -1457,21 +1456,21 @@ mod tests {
 
     proptest! {
         #[test]
-        fn create_and_get_query(req in arb_create_query()) {
+        fn create_and_get_query(req in CreateQuery::generate()) {
             test_prop(|| async move {
                 prop_create_and_get_query(req).await;
             });
         }
 
         #[test]
-        fn drop_query(req in arb_create_query(), stop_mode in any::<StopMode>()) {
+        fn drop_query(req in CreateQuery::generate(), stop_mode in any::<StopMode>()) {
             test_prop(|| async move {
                 prop_drop_query(req, stop_mode).await;
             });
         }
 
         #[test]
-        fn update_fragment_states_empty_noop(req in arb_create_query()) {
+        fn update_fragment_states_empty_noop(req in CreateQuery::generate()) {
             test_prop(|| async move {
                 prop_update_fragment_states_empty_noop(req).await;
             });
@@ -1479,8 +1478,8 @@ mod tests {
 
         #[test]
         fn fragment_negative_capacity_rejected(
-            worker in arb_create_worker(),
-            req in arb_create_query(),
+            worker in CreateWorker::generate(),
+            req in CreateQuery::generate(),
         ) {
             test_prop(|| async move {
                 prop_fragment_negative_capacity_rejected(worker, req).await;
@@ -1489,8 +1488,8 @@ mod tests {
 
         #[test]
         fn fragment_exceeding_capacity_rejected(
-            worker in arb_create_worker(),
-            req in arb_create_query(),
+            worker in CreateWorker::generate(),
+            req in CreateQuery::generate(),
         ) {
             test_prop(|| async move {
                 prop_fragment_exceeding_capacity_rejected(worker, req).await;
@@ -1499,8 +1498,8 @@ mod tests {
 
         #[test]
         fn fragment_exactly_exhausts_capacity(
-            worker in arb_create_worker(),
-            req in arb_create_query(),
+            worker in CreateWorker::generate(),
+            req in CreateQuery::generate(),
         ) {
             test_prop(|| async move {
                 prop_fragment_exactly_exhausts_capacity(worker, req).await;
@@ -1509,8 +1508,8 @@ mod tests {
 
         #[test]
         fn fragment_zero_capacity(
-            worker in arb_create_worker(),
-            req in arb_create_query(),
+            worker in CreateWorker::generate(),
+            req in CreateQuery::generate(),
         ) {
             test_prop(|| async move {
                 prop_fragment_zero_capacity(worker, req).await;
@@ -1519,8 +1518,8 @@ mod tests {
 
         #[test]
         fn fragment_creation_reserves_capacity(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
         ) {
             test_prop(|| async move {
                 prop_fragment_creation_reserves_capacity(req, setup).await;
@@ -1529,8 +1528,8 @@ mod tests {
 
         #[test]
         fn capacity_released_on_fragment_terminal(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
             terminal_state in prop_oneof![
                 Just(FragmentState::Completed),
                 Just(FragmentState::Stopped),
@@ -1544,9 +1543,9 @@ mod tests {
 
         #[test]
         fn query_state_path_valid(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
-            path in arb_valid_state_path(),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
+            path in <Vec<QueryState> as Generate>::generate(),
         ) {
             test_prop(|| async move {
                 prop_query_state_path_valid(req, setup, path).await;
@@ -1555,9 +1554,9 @@ mod tests {
 
         #[test]
         fn terminal_state_preserves_identity(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
-            path in arb_valid_state_path(),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
+            path in <Vec<QueryState> as Generate>::generate(),
         ) {
             test_prop(|| async move {
                 prop_terminal_state_preserves_identity(req, setup, path).await;
@@ -1566,9 +1565,9 @@ mod tests {
 
         #[test]
         fn invalid_transitions_rejected(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
-            path in arb_valid_state_path(),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
+            path in <Vec<QueryState> as Generate>::generate(),
         ) {
             test_prop(|| async move {
                 prop_invalid_transitions_rejected(req, setup, path).await;
@@ -1576,21 +1575,21 @@ mod tests {
         }
 
         #[test]
-        fn fragments_stored_with_correct_defaults(req in arb_create_query(), setup in arb_fragment_setup(5)) {
+        fn fragments_stored_with_correct_defaults(req in CreateQuery::generate(), setup in ValidFragments::generate()) {
             test_prop(|| async move {
                 prop_fragments_stored_with_correct_defaults(req, setup).await;
             });
         }
 
         #[test]
-        fn fragments_reject_missing_query(setup in arb_fragment_setup(5)) {
+        fn fragments_reject_missing_query(setup in ValidFragments::generate()) {
             test_prop(|| async move {
                 prop_fragments_reject_missing_query(setup).await;
             });
         }
 
         #[test]
-        fn fragments_reject_missing_worker(req in arb_create_query(), setup in arb_fragment_setup(5)) {
+        fn fragments_reject_missing_worker(req in CreateQuery::generate(), setup in ValidFragments::generate()) {
             test_prop(|| async move {
                 prop_fragments_reject_missing_worker(req, setup).await;
             });
@@ -1598,8 +1597,8 @@ mod tests {
 
         #[test]
         fn capacity_conserved_on_fragment_terminal(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
             terminal_state in prop_oneof![
                 Just(FragmentState::Completed),
                 Just(FragmentState::Stopped),
@@ -1613,9 +1612,9 @@ mod tests {
 
         #[test]
         fn fail_query_from_non_terminal(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
-            path in arb_valid_state_path(),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
+            path in <Vec<QueryState> as Generate>::generate(),
             error_msg in "[a-z ]{1,50}",
         ) {
             test_prop(|| async move {
@@ -1625,9 +1624,9 @@ mod tests {
 
         #[test]
         fn fail_query_from_terminal_rejected(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
-            path in arb_valid_state_path().prop_filter(
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
+            path in <Vec<QueryState> as Generate>::generate().prop_filter(
                 "need Completed or Stopped terminal",
                 |p| matches!(p.last(), Some(QueryState::Completed) | Some(QueryState::Stopped)),
             ),
@@ -1639,8 +1638,8 @@ mod tests {
 
         #[test]
         fn update_fragment_states_applied(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
             target_state in arb_fragment_state(),
         ) {
             test_prop(|| async move {
@@ -1650,8 +1649,8 @@ mod tests {
 
         #[test]
         fn update_fragment_states_partial(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
             target_state in arb_forward_fragment_state(),
         ) {
             test_prop(|| async move {
@@ -1661,8 +1660,8 @@ mod tests {
 
         #[test]
         fn get_mismatch_query_correctness(
-            queries in prop::collection::vec(arb_create_query(), 1..=5usize),
-            setup in arb_fragment_setup(5),
+            queries in prop::collection::vec(CreateQuery::generate(), 1..=5usize),
+            setup in ValidFragments::generate(),
         ) {
             test_prop(|| async move {
                 prop_get_mismatch_query_correctness(queries, setup).await;
@@ -1671,8 +1670,8 @@ mod tests {
 
         #[test]
         fn get_fragments_returns_created(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
         ) {
             test_prop(|| async move {
                 prop_get_fragments_returns_created(req, setup).await;
@@ -1681,8 +1680,8 @@ mod tests {
 
         #[test]
         fn create_fragments_transitions_to_planned(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
         ) {
             test_prop(|| async move {
                 prop_create_fragments_transitions_to_planned(req, setup).await;
@@ -1691,8 +1690,8 @@ mod tests {
 
         #[test]
         fn fragment_state_derives_query_state(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
         ) {
             test_prop(|| async move {
                 prop_fragment_state_derives_query_state(req, setup).await;
@@ -1701,8 +1700,8 @@ mod tests {
 
         #[test]
         fn one_failed_fragment_fails_query(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
         ) {
             test_prop(|| async move {
                 prop_one_failed_fragment_fails_query(req, setup).await;
@@ -1711,8 +1710,8 @@ mod tests {
 
         #[test]
         fn worker_internal_error_aggregated(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
         ) {
             test_prop(|| async move {
                 prop_worker_internal_error_aggregated(req, setup).await;
@@ -1721,8 +1720,8 @@ mod tests {
 
         #[test]
         fn all_fragments_failed_errors_aggregated(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
         ) {
             test_prop(|| async move {
                 prop_all_fragments_failed_errors_aggregated(req, setup).await;
@@ -1731,8 +1730,8 @@ mod tests {
 
         #[test]
         fn timestamps_propagated(
-            req in arb_create_query(),
-            setup in arb_fragment_setup(5),
+            req in CreateQuery::generate(),
+            setup in ValidFragments::generate(),
         ) {
             test_prop(|| async move {
                 prop_timestamps_propagated(req, setup).await;

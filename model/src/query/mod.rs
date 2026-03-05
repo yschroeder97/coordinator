@@ -3,8 +3,6 @@ pub mod query_state;
 
 use crate::IntoCondition;
 #[cfg(feature = "testing")]
-use proptest::prelude::Just;
-#[cfg(feature = "testing")]
 use proptest_derive::Arbitrary;
 use query_state::{DesiredQueryState, QueryState};
 use sea_orm::ActiveValue::{NotSet, Set};
@@ -212,18 +210,23 @@ impl IntoCondition for GetQuery {
 }
 
 #[cfg(feature = "testing")]
-proptest::prop_compose! {
-    pub fn arb_create_query()(
-        name in proptest::string::string_regex("[a-z][a-z0-9_-]{2,29}").unwrap(),
-        statement in proptest::string::string_regex("SELECT [a-z]+ FROM [a-z]+").unwrap(),
-        block_until in proptest::prop_oneof![
-            Just(QueryState::Pending),
-            Just(QueryState::Planned),
-            Just(QueryState::Registered),
-            Just(QueryState::Running),
-            Just(QueryState::Completed),
-        ],
-    ) -> CreateQuery {
-        CreateQuery::new(statement).name(name).block_until(block_until)
+impl crate::Generate for CreateQuery {
+    fn generate() -> proptest::strategy::BoxedStrategy<Self> {
+        use proptest::prelude::*;
+        (
+            proptest::string::string_regex("[a-z][a-z0-9_-]{2,29}").unwrap(),
+            proptest::string::string_regex("SELECT [a-z]+ FROM [a-z]+").unwrap(),
+            prop_oneof![
+                Just(QueryState::Pending),
+                Just(QueryState::Planned),
+                Just(QueryState::Registered),
+                Just(QueryState::Running),
+                Just(QueryState::Completed),
+            ],
+        )
+            .prop_map(|(name, statement, block_until)| {
+                CreateQuery::new(statement).name(name).block_until(block_until)
+            })
+            .boxed()
     }
 }

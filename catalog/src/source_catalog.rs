@@ -95,7 +95,8 @@ mod tests {
     use crate::testing::test_prop;
     use model::source::physical_source::DropPhysicalSource;
     use model::source::logical_source::CreateLogicalSource;
-    use model::testing::{PhysicalSourceWithRefs, arb_create_worker, arb_physical_with_refs};
+    use model::Generate;
+    use model::source::physical_source::PhysicalSourceWithRefs;
     use model::worker::CreateWorker;
     use proptest::prelude::*;
     use proptest::proptest;
@@ -456,14 +457,14 @@ mod tests {
         }
 
         #[test]
-        fn capacity_constraints(worker in arb_create_worker()) {
+        fn capacity_constraints(worker in CreateWorker::generate()) {
             test_prop(|| async move {
                 prop_capacity_constraints(worker).await;
             });
         }
 
         #[test]
-        fn get_physical_source(req in arb_physical_with_refs()) {
+        fn get_physical_source(req in PhysicalSourceWithRefs::generate()) {
             test_prop(|| async move {
                 prop_get_physical_source(req).await;
             });
@@ -477,14 +478,14 @@ mod tests {
         }
 
         #[test]
-        fn physical_source_refs_exist(req in arb_physical_with_refs()) {
+        fn physical_source_refs_exist(req in PhysicalSourceWithRefs::generate()) {
             test_prop(|| async move {
                 prop_physical_refs_exist(req).await;
             })
         }
 
         #[test]
-        fn physical_source_drop_with_refs(req in arb_physical_with_refs()) {
+        fn physical_source_drop_with_refs(req in PhysicalSourceWithRefs::generate()) {
             test_prop(|| async move {
                 prop_drop_with_refs_fails(req).await;
             })
@@ -498,28 +499,28 @@ mod tests {
         }
 
         #[test]
-        fn drop_physical_by_id(req in arb_physical_with_refs()) {
+        fn drop_physical_by_id(req in PhysicalSourceWithRefs::generate()) {
             test_prop(|| async move {
                 prop_drop_physical_by_id(req).await;
             })
         }
 
         #[test]
-        fn drop_physical_by_logical_source(req in arb_physical_with_refs()) {
+        fn drop_physical_by_logical_source(req in PhysicalSourceWithRefs::generate()) {
             test_prop(|| async move {
                 prop_drop_physical_by_logical_source(req).await;
             })
         }
 
         #[test]
-        fn drop_physical_no_match_noop(req in arb_physical_with_refs()) {
+        fn drop_physical_no_match_noop(req in PhysicalSourceWithRefs::generate()) {
             test_prop(|| async move {
                 prop_drop_physical_no_match_noop(req).await;
             })
         }
 
         #[test]
-        fn create_drop_create_physical_succeeds(req in arb_physical_with_refs()) {
+        fn create_drop_create_physical_succeeds(req in PhysicalSourceWithRefs::generate()) {
             test_prop(|| async move {
                 prop_create_drop_create_physical(req).await;
             })
