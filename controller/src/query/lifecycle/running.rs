@@ -3,10 +3,12 @@ use crate::cluster::worker_client::{
 };
 use crate::cluster::worker_registry::WorkerError;
 use crate::query::Completed;
-use crate::query::reconciler::{QueryContext, Transition};
+use crate::query::context::QueryContext;
+use crate::query::reconciler::Transition;
+use crate::query::retry::RetryPolicy;
 use model::Set;
-use model::query::fragment::{self, FragmentError, FragmentState};
 use model::query::StopMode;
+use model::query::fragment::{self, FragmentError, FragmentState};
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -37,10 +39,14 @@ impl Running {
         &self,
         ctx: &QueryContext,
     ) -> Vec<Result<QueryStatusReply, WorkerError>> {
-        ctx.broadcast_rpc(&self.fragments, |id| {
-            let (rx, req) = GetFragmentStatusRequest::new(id);
-            (rx, Rpc::GetFragmentStatus(req))
-        })
+        ctx.broadcast(
+            &self.fragments,
+            |id| {
+                let (rx, req) = GetFragmentStatusRequest::new(id);
+                (rx, Rpc::GetFragmentStatus(req))
+            },
+            &RetryPolicy::Transition,
+        )
         .await
     }
 }

@@ -1,6 +1,7 @@
 use crate::cluster::worker_registry::WorkerRegistryHandle;
 use crate::query::QueryId;
-use crate::query::reconciler::{QueryContext, QueryReconciler};
+use crate::query::context::QueryContext;
+use crate::query::reconciler::QueryReconciler;
 use catalog::Catalog;
 use catalog::Reconcilable;
 use model::query::*;

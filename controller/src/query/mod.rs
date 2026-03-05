@@ -1,8 +1,7 @@
-mod pending;
-mod planned;
+mod context;
+mod lifecycle;
 mod reconciler;
-mod registered;
-mod running;
+pub(crate) mod retry;
 pub mod service;
 
 pub type QueryId = i64;

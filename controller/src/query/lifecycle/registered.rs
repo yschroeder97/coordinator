@@ -1,5 +1,6 @@
-use crate::query::reconciler::{QueryContext, Transition};
-use crate::query::running::Running;
+use crate::query::context::QueryContext;
+use crate::query::lifecycle::running::Running;
+use crate::query::reconciler::Transition;
 use model::query::StopMode;
 use model::query::fragment;
 use tracing::info;

@@ -1,6 +1,6 @@
 use crate::cluster::worker_client::{Rpc, WorkerClientErr};
 use model::query::fragment::FragmentError;
-use model::worker::endpoint::GrpcAddr;
+use model::worker::endpoint::{GrpcAddr, HostAddr};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
@@ -12,6 +12,9 @@ pub(crate) enum WorkerError {
 
     #[error("RPC error")]
     ClientError(#[from] WorkerClientErr),
+
+    #[error("Worker '{0}' has been removed")]
+    WorkerRemoved(HostAddr),
 }
 
 impl WorkerError {
@@ -26,6 +29,7 @@ impl WorkerError {
                     | tonic::Code::Unknown
                     | tonic::Code::Aborted
             ),
+            Self::WorkerRemoved(_) => false,
         }
     }
 }
@@ -45,6 +49,9 @@ impl From<WorkerError> for FragmentError {
         match e {
             WorkerError::ClientUnavailable(addr) => FragmentError::WorkerCommunication {
                 msg: format!("Worker '{addr}' unavailable"),
+            },
+            WorkerError::WorkerRemoved(addr) => FragmentError::WorkerCommunication {
+                msg: format!("Worker '{addr}' removed"),
             },
             WorkerError::ClientError(WorkerClientErr::Connection(err, addr)) => {
                 FragmentError::WorkerCommunication {
