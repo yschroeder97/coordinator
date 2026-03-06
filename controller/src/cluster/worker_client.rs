@@ -1,4 +1,4 @@
-use crate::request::Request;
+use common::request::Request;
 use model::query::StopMode;
 use model::query::fragment::FragmentId;
 use model::worker::endpoint::GrpcAddr;

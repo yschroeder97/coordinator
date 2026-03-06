@@ -385,6 +385,7 @@ name = "catalog"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "common",
  "madsim-tokio",
  "migration",
  "model",
@@ -478,6 +479,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "madsim-tokio",
+ "sea-orm",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -499,6 +508,7 @@ dependencies = [
  "anyhow",
  "catalog",
  "chrono",
+ "common",
  "fail",
  "flume 0.12.0",
  "futures-util",
@@ -518,6 +528,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "catalog",
+ "common",
  "controller",
  "fail",
  "flume 0.12.0",

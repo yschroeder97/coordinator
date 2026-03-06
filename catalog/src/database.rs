@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
+use common::error::Retryable;
 use migration::{Migrator, MigratorTrait};
-use sea_orm::{ConnectOptions, DatabaseConnection, DbErr, RuntimeErr, SqlxError};
+use sea_orm::{ConnectOptions, DatabaseConnection, DbErr};
 use std::future::Future;
 use std::time::Duration;
 use tokio_retry::RetryIf;
@@ -69,15 +70,7 @@ impl Database {
             ExponentialBackoff::from_millis(50).map(jitter).take(5),
             || op(self.conn.clone()),
             |err: &DbErr| {
-                if match err {
-                    DbErr::ConnectionAcquire(_) => true,
-                    DbErr::Conn(RuntimeErr::SqlxError(err))
-                    | DbErr::Exec(RuntimeErr::SqlxError(err))
-                    | DbErr::Query(RuntimeErr::SqlxError(err)) => {
-                        matches!(err, SqlxError::PoolTimedOut | SqlxError::Io(_))
-                    }
-                    _ => false,
-                } {
+                if err.retryable() {
                     warn!("Transient database error, retrying: {err}");
                     return true;
                 }

@@ -1,4 +1,5 @@
 use crate::cluster::worker_client::{Rpc, WorkerClientErr};
+use common::error::Retryable;
 use model::query::fragment::FragmentError;
 use model::worker::endpoint::{GrpcAddr, HostAddr};
 use std::collections::HashMap;
@@ -17,8 +18,8 @@ pub(crate) enum WorkerError {
     WorkerRemoved(HostAddr),
 }
 
-impl WorkerError {
-    pub(crate) fn is_retryable(&self) -> bool {
+impl Retryable for WorkerError {
+    fn retryable(&self) -> bool {
         match self {
             Self::ClientUnavailable(_) | Self::ClientError(WorkerClientErr::Connection(..)) => {
                 true

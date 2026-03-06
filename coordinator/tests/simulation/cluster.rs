@@ -8,7 +8,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use controller::query::service::QUERY_SERVICE_POLLING_DURATION;
-use controller::request::Request;
+use common::request::Request;
 use coordinator::coordinator::{CoordinatorRequest, start_for_test};
 use futures::future::join_all;
 use madsim::rand::{Rng, thread_rng};

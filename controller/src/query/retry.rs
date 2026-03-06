@@ -1,6 +1,7 @@
 use crate::cluster::worker_client::{Rpc, WorkerClientErr};
 use crate::cluster::worker_registry::{WorkerError, WorkerRegistryHandle};
 use catalog::Catalog;
+use common::error::Retryable;
 use model::query::fragment::{self, FragmentId};
 use model::worker::endpoint::HostAddr;
 use model::worker::{DesiredWorkerState, GetWorker};
@@ -55,7 +56,7 @@ impl RetryPolicy {
         .await;
 
         match result {
-            Err(e) if e.is_retryable() => {
+            Err(e) if e.retryable() => {
                 if let Self::Rollback { catalog } = self
                     && is_worker_removed(catalog, &fragment.host_addr).await
                 {
@@ -81,7 +82,7 @@ impl RetryPolicy {
         RetryIf::spawn(
             self.strategy(),
             || self.action(registry, mk_rpc, fragment),
-            WorkerError::is_retryable,
+            WorkerError::retryable,
         )
         .await
     }

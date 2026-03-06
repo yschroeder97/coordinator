@@ -8,6 +8,7 @@ testing = ["catalog/testing", "controller/testing"]
 failpoints = ["controller/failpoints"]
 
 [dependencies]
+common.workspace = true
 catalog.workspace = true
 model.workspace = true
 controller.workspace = true
