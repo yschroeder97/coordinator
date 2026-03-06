@@ -11,16 +11,27 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use futures_util::FutureExt;
-use std::panic::AssertUnwindSafe;
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument, debug, error, info, info_span, warn};
+
+#[cfg(madsim)]
+async fn supervised<F: std::future::Future<Output = ()>>(fut: F) -> bool {
+    use futures_util::FutureExt;
+    use std::panic::AssertUnwindSafe;
+    AssertUnwindSafe(fut).catch_unwind().await.is_err()
+}
+
+#[cfg(not(madsim))]
+async fn supervised<F: std::future::Future<Output = ()>>(fut: F) -> bool {
+    fut.await;
+    false
+}
 
 pub const QUERY_SERVICE_POLLING_DURATION: Duration = Duration::from_secs(10);
 
 pub struct QueryService {
     catalog: Arc<Catalog>,
     worker_registry: WorkerRegistryHandle,
-    tasks: HashMap<QueryId, (flume::Sender<StopMode>, JoinHandle<()>)>,
+    tasks: HashMap<QueryId, (flume::Sender<StopMode>, JoinHandle<bool>)>,
 }
 
 impl QueryService {
@@ -40,7 +51,10 @@ impl QueryService {
         loop {
             tokio::select! {
                 result = intent.changed() => {
-                    result.expect("Query catalog notification channel closed unexpectedly");
+                    if result.is_err() {
+                        info!("Query catalog notification channel closed, shutting down");
+                        return;
+                    }
                 }
                 _ = tokio::time::sleep(QUERY_SERVICE_POLLING_DURATION) => {}
             }
@@ -57,7 +71,24 @@ impl QueryService {
             }
         };
 
-        self.tasks.retain(|_, (_, handle)| !handle.is_finished());
+        let finished: Vec<QueryId> = self
+            .tasks
+            .iter()
+            .filter(|(_, (_, h))| h.is_finished())
+            .map(|(&id, _)| id)
+            .collect();
+        for id in finished {
+            if let Some((_, handle)) = self.tasks.remove(&id) {
+                match handle.await {
+                    Ok(true) => error!(query_id = id, "Reconciler panicked"),
+                    Err(e) if e.is_panic() => {
+                        error!(query_id = id, "Reconciler panicked: {e:?}")
+                    }
+                    Err(e) => error!(query_id = id, "Reconciler task error: {e:?}"),
+                    Ok(false) => {}
+                }
+            }
+        }
 
         for mismatch in mismatches {
             if mismatch.current_state.is_terminal() {
@@ -91,14 +122,7 @@ impl QueryService {
             worker_registry: self.worker_registry.clone(),
         };
 
-        let handle = tokio::spawn(async move {
-            if let Err(e) = AssertUnwindSafe(QueryReconciler::run(ctx, stop_rx))
-                .catch_unwind()
-                .await
-            {
-                error!(query_id, "Reconciler panicked: {e:?}");
-            }
-        });
+        let handle = tokio::spawn(supervised(QueryReconciler::run(ctx, stop_rx)));
         self.tasks.insert(query_id, (stop_tx, handle));
     }
 
@@ -114,5 +138,11 @@ impl QueryService {
             Ok(_) => debug!(query_id = query_to_stop.id, ?mode, "Sent stop signal"),
             Err(_) => debug!(query_id = query_to_stop.id, "Reconciliation task already finished"),
         }
+    }
+}
+
+impl crate::Supervisable for QueryService {
+    fn start(self) -> impl std::future::Future<Output = ()> + Send {
+        self.run().instrument(info_span!("query_service"))
     }
 }

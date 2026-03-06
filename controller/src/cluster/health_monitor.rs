@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::{Channel, Endpoint};
-use tracing::{debug, info, instrument, warn};
+use tracing::{Instrument, debug, info, info_span, instrument, warn};
 
 pub mod health_proto {
     tonic::include_proto!("grpc.health.v1");
@@ -43,9 +43,13 @@ impl HealthMonitor {
 
         loop {
             tokio::select! {
-                Ok(()) = state_rx.changed() => {
-                    self.sync_tracked_workers().await;
-                }
+                result = state_rx.changed() => match result {
+                    Ok(()) => self.sync_tracked_workers().await,
+                    Err(_) => {
+                        info!("Worker catalog notification channel closed, shutting down");
+                        return;
+                    }
+                },
                 _ = tokio::time::sleep(HEALTH_CHECK_INTERVAL) => {
                     self.check_all().await;
                 }
@@ -130,5 +134,11 @@ impl HealthMonitor {
             self.clients.insert(addr.clone(), HealthClient::new(channel));
         }
         self.clients.get_mut(addr)
+    }
+}
+
+impl crate::Supervisable for HealthMonitor {
+    fn start(self) -> impl std::future::Future<Output = ()> + Send {
+        self.run().instrument(info_span!("health_monitor"))
     }
 }

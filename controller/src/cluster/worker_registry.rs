@@ -121,12 +121,20 @@ impl WorkerRegistryHandle {
 }
 
 #[derive(Default)]
-pub(crate) struct WorkerRegistry {
+pub struct WorkerRegistry {
     shared: Arc<RwLock<HashMap<GrpcAddr, flume::Sender<Rpc>>>>,
 }
 
+impl Clone for WorkerRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+        }
+    }
+}
+
 impl WorkerRegistry {
-    pub(crate) fn handle(&self) -> WorkerRegistryHandle {
+    pub fn handle(&self) -> WorkerRegistryHandle {
         WorkerRegistryHandle {
             shared: self.shared.clone(),
         }

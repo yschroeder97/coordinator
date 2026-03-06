@@ -1,14 +1,15 @@
+use crate::Supervisable;
 use crate::cluster::poly_join_set::{AbortHandle, JoinSet};
 use crate::cluster::service::WorkerStateInternal::{Active, Connecting};
 use crate::cluster::worker_client::{Rpc, WorkerClient, WorkerClientErr};
-use crate::cluster::worker_registry::{WorkerRegistry, WorkerRegistryHandle};
+use crate::cluster::worker_registry::WorkerRegistry;
 use catalog::Reconcilable;
 use catalog::worker_catalog::WorkerCatalog;
 use model::worker::endpoint::GrpcAddr;
 use model::worker::{self, DesiredWorkerState, WorkerState};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 
 pub const CLUSTER_SERVICE_POLLING_DURATION: tokio::time::Duration = tokio::time::Duration::from_secs(5);
 
@@ -31,20 +32,16 @@ pub struct ClusterService {
 }
 
 impl ClusterService {
-    pub fn new(worker_catalog: Arc<WorkerCatalog>) -> Self {
+    pub fn new(worker_catalog: Arc<WorkerCatalog>, registry: WorkerRegistry) -> Self {
         ClusterService {
             worker_catalog,
-            registry: WorkerRegistry::default(),
+            registry,
             workers: HashMap::default(),
             connecting: JoinSet::new(),
         }
     }
 
-    pub fn registry_handle(&self) -> WorkerRegistryHandle {
-        self.registry.handle()
-    }
-
-    pub async fn run(&mut self) {
+    pub async fn run(mut self) {
         let mut intent_rx = self.worker_catalog.subscribe_intent();
         let mut state_rx = self.worker_catalog.subscribe_state();
         info!("Starting");
@@ -53,14 +50,19 @@ impl ClusterService {
         loop {
             tokio::select! {
                 result = intent_rx.changed() => {
-                    result.expect("Worker catalog notification channel closed unexpectedly");
+                    if result.is_err() {
+                        info!("Worker catalog notification channel closed, shutting down");
+                        return;
+                    }
                 }
                 Ok(()) = state_rx.changed() => {}
                 Some(result) = self.connecting.join_next() => {
                     match result {
                         Ok(client_or_err) => self.on_progress_connecting(client_or_err).await,
                         Err(e) if e.is_cancelled() => {}
-                        Err(e) => panic!("Worker connection task panicked: {:?}", e),
+                        Err(e) => {
+                            error!("Worker connection task failed: {:?}", e);
+                        }
                     }
                     continue;
                 }
@@ -176,5 +178,11 @@ impl ClusterService {
             .update_worker_state(model.into(), WorkerState::Unreachable)
             .await
             .unwrap();
+    }
+}
+
+impl Supervisable for ClusterService {
+    fn start(self) -> impl std::future::Future<Output = ()> + Send {
+        self.run().instrument(info_span!("cluster_service"))
     }
 }

@@ -17,7 +17,23 @@ use model::source::physical_source::{
     self, CreatePhysicalSource, DropPhysicalSource, GetPhysicalSource,
 };
 use model::worker::{self, CreateWorker, DropWorker, GetWorker};
-use tracing::{Instrument, info, info_span};
+use controller::cluster::worker_registry::WorkerRegistry;
+use std::sync::Arc;
+use tokio::task::JoinHandle;
+use tracing::{error, info, warn};
+
+#[cfg(madsim)]
+async fn supervised<F: std::future::Future<Output = ()>>(fut: F) -> bool {
+    use futures_util::FutureExt;
+    use std::panic::AssertUnwindSafe;
+    AssertUnwindSafe(fut).catch_unwind().await.is_err()
+}
+
+#[cfg(not(madsim))]
+async fn supervised<F: std::future::Future<Output = ()>>(fut: F) -> bool {
+    fut.await;
+    false
+}
 
 pub(crate) type CreateLogicalSourceRequest = Request<CreateLogicalSource, Result<logical_source::Model>>;
 pub(crate) type CreatePhysicalSourceRequest =
@@ -101,6 +117,81 @@ into_request!(GetWorker, GetWorkerRequest, CoordinatorRequest);
 
 const DEFAULT_CAPACITY: usize = 16;
 
+fn spawn_service<S: controller::Supervisable>(service: S) -> JoinHandle<bool> {
+    tokio::spawn(supervised(service.start()))
+}
+
+fn panicked(result: &std::result::Result<bool, tokio::task::JoinError>) -> bool {
+    match result {
+        Ok(true) => true,
+        Err(e) if e.is_panic() => true,
+        _ => false,
+    }
+}
+
+async fn supervise(
+    catalog: Arc<Catalog>,
+    registry: WorkerRegistry,
+    receiver: flume::Receiver<CoordinatorRequest>,
+) {
+    let spawn_cluster = || {
+        spawn_service(ClusterService::new(catalog.worker.clone(), registry.clone()))
+    };
+    let spawn_health = || spawn_service(HealthMonitor::new(catalog.worker.clone()));
+    let spawn_query = || {
+        spawn_service(QueryService::new(catalog.clone(), registry.handle()))
+    };
+    let spawn_request = || {
+        spawn_service(RequestHandler::new(receiver.clone(), catalog.clone()))
+    };
+
+    let mut cluster = spawn_cluster();
+    let mut health = spawn_health();
+    let mut query = spawn_query();
+    let mut request = spawn_request();
+
+    loop {
+        tokio::select! {
+            result = &mut cluster => {
+                if panicked(&result) {
+                    error!("ClusterService panicked, restarting");
+                    cluster = spawn_cluster();
+                } else {
+                    warn!("ClusterService exited: {result:?}");
+                    break;
+                }
+            }
+            result = &mut health => {
+                if panicked(&result) {
+                    error!("HealthMonitor panicked, restarting");
+                    health = spawn_health();
+                } else {
+                    warn!("HealthMonitor exited: {result:?}");
+                    break;
+                }
+            }
+            result = &mut query => {
+                if panicked(&result) {
+                    error!("QueryService panicked, restarting");
+                    query = spawn_query();
+                } else {
+                    warn!("QueryService exited: {result:?}");
+                    break;
+                }
+            }
+            result = &mut request => {
+                if panicked(&result) {
+                    error!("RequestHandler panicked, restarting");
+                    request = spawn_request();
+                } else {
+                    info!("RequestHandler exited, shutting down");
+                    break;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(not(madsim))]
 pub fn start(
     state_backend: StateBackend,
@@ -121,36 +212,9 @@ pub fn start(
                 .await
                 .expect("Failed to create database state");
             let catalog = Catalog::from(state);
+            let registry = WorkerRegistry::default();
 
-            let mut cluster_service = ClusterService::new(catalog.worker.clone());
-            let worker_registry = cluster_service.registry_handle();
-            tokio::spawn(async move {
-                cluster_service
-                    .run()
-                    .instrument(info_span!("cluster_service"))
-                    .await
-            });
-
-            let health_catalog = catalog.worker.clone();
-            tokio::spawn(async move {
-                HealthMonitor::new(health_catalog)
-                    .run()
-                    .instrument(info_span!("health_monitor"))
-                    .await
-            });
-
-            let query_catalog = catalog.clone();
-            tokio::spawn(async move {
-                QueryService::new(query_catalog, worker_registry)
-                    .run()
-                    .instrument(info_span!("query_service"))
-                    .await
-            });
-
-            RequestHandler::new(receiver, catalog.clone())
-                .run()
-                .instrument(info_span!("request_listener"))
-                .await
+            supervise(catalog, registry, receiver).await
         });
 
         rt.shutdown_background();
@@ -165,38 +229,9 @@ pub async fn start_for_test() -> flume::Sender<CoordinatorRequest> {
     let (handle, receiver) = flume::bounded(DEFAULT_CAPACITY);
 
     let catalog = Catalog::for_test().await;
+    let registry = WorkerRegistry::default();
 
-    let mut cluster_service = ClusterService::new(catalog.worker.clone());
-    let worker_registry = cluster_service.registry_handle();
-    tokio::spawn(async move {
-        cluster_service
-            .run()
-            .instrument(info_span!("cluster_service"))
-            .await
-    });
-
-    let health_catalog = catalog.worker.clone();
-    tokio::spawn(async move {
-        HealthMonitor::new(health_catalog)
-            .run()
-            .instrument(info_span!("health_monitor"))
-            .await
-    });
-
-    let query_catalog = catalog.clone();
-    tokio::spawn(async move {
-        QueryService::new(query_catalog, worker_registry)
-            .run()
-            .instrument(info_span!("query_service"))
-            .await
-    });
-
-    tokio::spawn(async move {
-        RequestHandler::new(receiver, catalog)
-            .run()
-            .instrument(info_span!("request_handler"))
-            .await
-    });
+    tokio::spawn(supervise(catalog, registry, receiver));
 
     handle
 }

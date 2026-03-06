@@ -8,7 +8,7 @@ use model::query::{GetQuery, QueryId};
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::{debug, info, instrument};
+use tracing::{Instrument, debug, info, info_span, instrument};
 
 macro_rules! dispatch {
     ($self:ident, $req:expr, $field:ident . $method:ident) => {{
@@ -234,6 +234,12 @@ impl RequestHandler {
                 })
             }
         }
+    }
+}
+
+impl controller::Supervisable for RequestHandler {
+    fn start(self) -> impl std::future::Future<Output = ()> + Send {
+        self.run().instrument(info_span!("request_handler"))
     }
 }
 
