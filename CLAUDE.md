@@ -103,6 +103,7 @@ Defined in `proto/SingleNodeWorkerRPCService.proto` and `proto/health.proto`. Au
 ## Code Style
 
 - **No comments:** Do not add comments (inline, doc comments, or block comments) to code. Comments are added manually later.
+- **No magic numbers:** Never use literal numeric values inline. Always extract them into named constants.
 - **Imports:** Only use fully qualified paths (e.g., `std::collections::HashMap`) when there is a name collision or the type name is heavily overloaded across crates (e.g., `flume::Sender` vs `tokio::sync::mpsc::Sender` vs `oneshot::Sender`). Otherwise, import and use the type name directly.
 
 ## Git Workflow
