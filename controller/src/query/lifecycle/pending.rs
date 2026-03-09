@@ -1,15 +1,13 @@
 use crate::query::context::QueryContext;
 use crate::query::lifecycle::planned::Planned;
-use crate::query::reconciler::Transition;
+use crate::query::query_task::Transition;
 use fail::fail_point;
 use model::query::StopMode;
-use model::query::query_state::QueryState;
 
 pub(crate) struct Pending;
 
 impl Transition for Pending {
     type Next = Planned;
-    const STATE: QueryState = QueryState::Pending;
 
     async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Planned> {
         #[cfg(feature = "testing")]

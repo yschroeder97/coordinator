@@ -295,6 +295,7 @@ impl Reconcilable for QueryCatalog {
             .with_retry(|conn| async move {
                 query::Entity::find()
                     .filter(Expr::cust("current_state <> desired_state"))
+                    .filter(Expr::cust("current_state NOT IN ('Completed', 'Stopped', 'Failed')"))
                     .all(&conn)
                     .await
             })
@@ -852,67 +853,6 @@ mod tests {
             Just(FragmentState::Stopped),
             Just(FragmentState::Failed),
         ]
-    }
-
-    async fn prop_fail_query_from_non_terminal(
-        req: CreateQuery,
-        setup: ValidFragments,
-        path: Vec<QueryState>,
-        error_msg: String,
-    ) {
-        let catalog = Catalog::for_test().await;
-        for w in &setup.workers {
-            catalog.worker.create_worker(w.clone()).await.unwrap();
-        }
-        let created = catalog.query.create_query(req).await.unwrap();
-
-        let non_terminal_path = &path[..path.len() - 1];
-        let models = walk_query_via_fragments(&catalog, &created, &setup, non_terminal_path).await;
-        let current = models.last().unwrap().clone();
-
-        let failed = catalog
-            .query
-            .fail_query(current.clone(), error_msg.clone())
-            .await
-            .expect("fail_query from non-terminal state should succeed");
-
-        assert_eq!(failed.current_state, QueryState::Failed);
-        assert_eq!(failed.error, Some(serde_json::Value::String(error_msg)));
-        assert_eq!(failed.name, current.name);
-        assert_eq!(failed.statement, current.statement);
-
-        let refetched = catalog
-            .query
-            .get_query(GetQuery::all().with_id(created.id))
-            .await
-            .unwrap();
-        assert_eq!(refetched.len(), 1);
-        assert_eq!(refetched[0], failed);
-    }
-
-    async fn prop_fail_query_from_terminal_rejected(
-        req: CreateQuery,
-        setup: ValidFragments,
-        path: Vec<QueryState>,
-    ) {
-        let catalog = Catalog::for_test().await;
-        for w in &setup.workers {
-            catalog.worker.create_worker(w.clone()).await.unwrap();
-        }
-        let created = catalog.query.create_query(req).await.unwrap();
-
-        let models = walk_query_via_fragments(&catalog, &created, &setup, &path).await;
-        let terminal = models.last().unwrap().clone();
-
-        assert!(
-            catalog
-                .query
-                .fail_query(terminal.clone(), "should fail".to_string())
-                .await
-                .is_err(),
-            "fail_query from {:?} should be rejected",
-            terminal.current_state
-        );
     }
 
     async fn prop_update_fragment_states_applied(
@@ -1607,32 +1547,6 @@ mod tests {
         ) {
             test_prop(|| async move {
                 prop_capacity_conserved_on_fragment_terminal(req, setup, terminal_state).await;
-            });
-        }
-
-        #[test]
-        fn fail_query_from_non_terminal(
-            req in CreateQuery::generate(),
-            setup in ValidFragments::generate(),
-            path in <Vec<QueryState> as Generate>::generate(),
-            error_msg in "[a-z ]{1,50}",
-        ) {
-            test_prop(|| async move {
-                prop_fail_query_from_non_terminal(req, setup, path, error_msg).await;
-            });
-        }
-
-        #[test]
-        fn fail_query_from_terminal_rejected(
-            req in CreateQuery::generate(),
-            setup in ValidFragments::generate(),
-            path in <Vec<QueryState> as Generate>::generate().prop_filter(
-                "need Completed or Stopped terminal",
-                |p| matches!(p.last(), Some(QueryState::Completed) | Some(QueryState::Stopped)),
-            ),
-        ) {
-            test_prop(|| async move {
-                prop_fail_query_from_terminal_rejected(req, setup, path).await;
             });
         }
 

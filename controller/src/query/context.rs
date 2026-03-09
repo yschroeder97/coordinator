@@ -1,8 +1,8 @@
-use crate::cluster::worker_client::{
+use crate::worker::worker_client::{
     RegisterFragmentRequest, Rpc, StartFragmentRequest, StopFragmentRequest,
     UnregisterFragmentRequest, WorkerClientErr,
 };
-use crate::cluster::worker_registry::{WorkerError, WorkerRegistryHandle};
+use crate::worker::worker_registry::{WorkerError, WorkerRegistryHandle};
 use crate::query::retry::RetryPolicy;
 use catalog::Catalog;
 use futures_util::future;
@@ -35,6 +35,7 @@ impl QueryContext {
         let futures = fragments
             .iter()
             .map(|fragment| retry.execute(&self.worker_registry, mk_rpc, fragment));
+        // join_all preserves input order: results[i] corresponds to fragments[i].
         future::join_all(futures).await
     }
 
@@ -113,7 +114,7 @@ impl QueryContext {
         fragments: &[fragment::Model],
         results: Vec<Result<(), WorkerError>>,
     ) -> anyhow::Result<Vec<fragment::Model>> {
-        debug_assert!(!fragments.is_empty(), "More than one fragment expected");
+        debug_assert!(!fragments.is_empty(), "At least than one fragment expected");
         debug_assert!(
             fragments
                 .iter()
@@ -188,6 +189,18 @@ impl QueryContext {
         }
     }
 
+    pub(crate) async fn persist_failed(&mut self, error: String) {
+        match self
+            .catalog
+            .query
+            .fail_query(self.query.clone(), error)
+            .await
+        {
+            Ok(query) => self.query = query,
+            Err(e) => error!("Failed to set query to Failed: {e}"),
+        }
+    }
+
     pub(crate) async fn persist_stopped(&mut self) {
         match self.catalog.query.stop_query(&self.query).await {
             Ok(query) => self.query = query,
@@ -195,14 +208,4 @@ impl QueryContext {
         }
     }
 
-    pub(crate) async fn persist_failed(&self, error: String) {
-        if let Err(e) = self
-            .catalog
-            .query
-            .fail_query(self.query.clone(), error)
-            .await
-        {
-            error!("Failed to set query to Failed: {e}");
-        }
-    }
 }

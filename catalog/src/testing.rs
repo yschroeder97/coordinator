@@ -76,11 +76,18 @@ pub async fn walk_query_via_fragments(
                 .stop_query(current)
                 .await
                 .expect("stop_query should succeed"),
-            QueryState::Failed => catalog
-                .query
-                .fail_query(current.clone(), "test failure".to_string())
-                .await
-                .expect("fail_query should succeed"),
+            QueryState::Failed => {
+                let frags = catalog.query.get_fragments(current.id).await.unwrap();
+                if frags.is_empty() {
+                    catalog
+                        .query
+                        .fail_query(current.clone(), "test failure".to_string())
+                        .await
+                        .expect("fail_query should succeed")
+                } else {
+                    advance_all_fragments(catalog, current.id, FragmentState::Failed).await
+                }
+            }
             QueryState::Pending => unreachable!("Cannot transition to Pending"),
         };
         models.push(updated);
@@ -132,11 +139,16 @@ pub async fn advance_query_to(catalog: &Arc<Catalog>, query_id: i64, target: Que
             catalog.query.stop_query(&query).await.unwrap();
         }
         QueryState::Failed => {
-            catalog
-                .query
-                .fail_query(query, "test failure".to_string())
-                .await
-                .unwrap();
+            let frags = catalog.query.get_fragments(query_id).await.unwrap();
+            if frags.is_empty() {
+                catalog
+                    .query
+                    .fail_query(query, "test failure".to_string())
+                    .await
+                    .unwrap();
+            } else {
+                advance_all_fragments(catalog, query_id, FragmentState::Failed).await;
+            }
         }
         QueryState::Pending => unreachable!(),
     }

@@ -1,11 +1,12 @@
-use crate::cluster::worker_client::{
+use crate::worker::worker_client::{
     FragmentError as ProtoError, GetFragmentStatusRequest, QueryStatusReply, Rpc,
 };
-use crate::cluster::worker_registry::WorkerError;
+use crate::worker::worker_registry::WorkerError;
 use crate::query::Completed;
 use crate::query::context::QueryContext;
-use crate::query::reconciler::Transition;
+use crate::query::query_task::Transition;
 use crate::query::retry::RetryPolicy;
+use common::error::Retryable;
 use model::Set;
 use model::query::StopMode;
 use model::query::fragment::{self, FragmentError, FragmentState};
@@ -13,7 +14,7 @@ use model::query::query_state::QueryState;
 use std::time::Duration;
 use tracing::{info, warn};
 
-const QUERY_POLLING_INTERVAL: Duration = Duration::from_secs(5);
+const QUERY_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(crate) struct Running {
     pub(crate) fragments: Vec<fragment::Model>,
@@ -52,72 +53,83 @@ impl Running {
     }
 }
 
+fn apply_status_reply(
+    fragment: &fragment::Model,
+    reply: QueryStatusReply,
+) -> Option<fragment::ActiveModel> {
+    let state = match FragmentState::try_from(reply.state) {
+        Ok(state) => state,
+        Err(tag) => {
+            warn!("Fragment {} returned unknown state tag {tag}", fragment.id);
+            return None;
+        }
+    };
+    let start_timestamp = reply
+        .metrics
+        .as_ref()
+        .and_then(|m| m.start_unix_time_in_ms)
+        .map(unix_ms_to_datetime);
+    let stop_timestamp = reply
+        .metrics
+        .as_ref()
+        .and_then(|m| m.stop_unix_time_in_ms)
+        .map(unix_ms_to_datetime);
+    let error = if state == FragmentState::Failed {
+        let err = reply
+            .metrics
+            .as_ref()
+            .and_then(|m| m.error.as_ref())
+            .map(FragmentError::from)
+            .unwrap_or_else(|| FragmentError::WorkerCommunication {
+                msg: "Fragment failed without error details".to_string(),
+            });
+        warn!(fragment_id = fragment.id, %err, "Fragment failed");
+        Some(err)
+    } else {
+        None
+    };
+
+    let mut am: fragment::ActiveModel = fragment.clone().into();
+    am.current_state = Set(state);
+    if let Some(ts) = start_timestamp {
+        am.start_timestamp = Set(Some(ts));
+    }
+    if let Some(ts) = stop_timestamp {
+        am.stop_timestamp = Set(Some(ts));
+    }
+    if let Some(err) = error {
+        am.error = Set(Some(err));
+    }
+    Some(am)
+}
+
 impl Transition for Running {
     type Next = Completed;
-    const STATE: QueryState = QueryState::Running;
 
     async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Completed> {
         loop {
-            tokio::time::sleep(QUERY_POLLING_INTERVAL).await;
-
             let results = self.poll_fragment_status(ctx).await;
 
-            let mut updates = Vec::new();
-
-            for (fragment, rpc_result) in self.fragments.iter().zip(results) {
-                let reply = match rpc_result {
-                    Ok(reply) => reply,
-                    Err(e) => {
+            let updates: Vec<_> = self
+                .fragments
+                .iter()
+                .zip(results)
+                .filter_map(|(fragment, rpc_result)| match rpc_result {
+                    Ok(reply) => apply_status_reply(fragment, reply),
+                    Err(e) if e.retryable() => {
                         warn!("Failed to poll fragment {} status: {e}", fragment.id);
-                        continue;
+                        None
                     }
-                };
-
-                let state = match FragmentState::try_from(reply.state) {
-                    Ok(state) => state,
-                    Err(tag) => {
-                        warn!("Fragment {} returned unknown state tag {tag}", fragment.id);
-                        continue;
+                    Err(e) => {
+                        let error = FragmentError::from(e);
+                        warn!(fragment_id = fragment.id, %error, "Fragment poll failed permanently");
+                        let mut am: fragment::ActiveModel = fragment.clone().into();
+                        am.current_state = Set(FragmentState::Failed);
+                        am.error = Set(Some(error));
+                        Some(am)
                     }
-                };
-                let start_timestamp = reply
-                    .metrics
-                    .as_ref()
-                    .and_then(|m| m.start_unix_time_in_ms)
-                    .map(unix_ms_to_datetime);
-                let stop_timestamp = reply
-                    .metrics
-                    .as_ref()
-                    .and_then(|m| m.stop_unix_time_in_ms)
-                    .map(unix_ms_to_datetime);
-                let error = if state == FragmentState::Failed {
-                    let err = reply
-                        .metrics
-                        .as_ref()
-                        .and_then(|m| m.error.as_ref())
-                        .map(FragmentError::from)
-                        .unwrap_or_else(|| FragmentError::WorkerCommunication {
-                            msg: "Fragment failed without error details".to_string(),
-                        });
-                    warn!(fragment_id = fragment.id, %err, "Fragment failed");
-                    Some(err)
-                } else {
-                    None
-                };
-
-                let mut am: fragment::ActiveModel = fragment.clone().into();
-                am.current_state = Set(state);
-                if let Some(ts) = start_timestamp {
-                    am.start_timestamp = Set(Some(ts));
-                }
-                if let Some(ts) = stop_timestamp {
-                    am.stop_timestamp = Set(Some(ts));
-                }
-                if let Some(err) = error {
-                    am.error = Set(Some(err));
-                }
-                updates.push(am);
-            }
+                })
+                .collect();
 
             match ctx
                 .catalog
@@ -142,6 +154,9 @@ impl Transition for Running {
                 info!("All fragments completed");
                 return Ok(Completed);
             }
+
+            // Poll again in 5s
+            tokio::time::sleep(QUERY_POLL_INTERVAL).await;
         }
     }
 
