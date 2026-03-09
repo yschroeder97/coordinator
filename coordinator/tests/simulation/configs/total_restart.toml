@@ -1,0 +1,12 @@
+timeout_secs = 300
+min_workers = 3
+
+[[workload]]
+name = "CrudWorkload"
+min_ops = 5
+max_ops = 15
+
+[[workload]]
+name = "Attrition"
+kill_rate = 0.0
+restart_all_after_secs = 5

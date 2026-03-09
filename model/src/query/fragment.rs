@@ -72,6 +72,17 @@ impl Related<crate::worker::Entity> for Entity {
 impl ActiveModelBehavior for ActiveModel {}
 
 #[derive(Clone, Debug)]
+pub struct GetFragment {
+    pub query_id: i64,
+}
+
+impl GetFragment {
+    pub fn for_query(query_id: i64) -> Self {
+        Self { query_id }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct CreateFragment {
     pub query_id: i64,
     pub host_addr: HostAddr,

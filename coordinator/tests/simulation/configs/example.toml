@@ -1,0 +1,21 @@
+title = "example"
+timeout_secs = 300
+min_workers = 3
+
+[network]
+send_latency_lo_ms = 1
+send_latency_hi_ms = 50
+packet_loss_rate = 0.02
+
+[[workload]]
+name = "CrudWorkload"
+min_ops = 10
+max_ops = 30
+max_sleep_secs = 3
+
+[[workload]]
+name = "Attrition"
+kill_rate = 0.15
+kill_interval_secs = 5
+restart_delay_lo_secs = 2
+restart_delay_hi_secs = 8

@@ -1,0 +1,6 @@
+timeout_secs = 120
+
+[[workload]]
+name = "CrudWorkload"
+min_ops = 5
+max_ops = 15

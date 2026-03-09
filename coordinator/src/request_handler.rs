@@ -1,4 +1,4 @@
-use crate::coordinator::{CoordinatorRequest, CreateQueryRequest, DropQueryRequest};
+use crate::coordinator::{CoordinatorRequest, CreateQueryRequest, DropQueryRequest, GetFragmentRequest};
 use catalog::Catalog;
 use catalog::Reconcilable;
 use common::request::Request;
@@ -219,6 +219,10 @@ impl RequestHandler {
             }
             CoordinatorRequest::GetWorker(r) => {
                 dispatch!(self, r, worker.get_worker)
+            }
+            CoordinatorRequest::GetFragment(r) => {
+                let GetFragmentRequest { payload, reply_to } = r;
+                let _ = reply_to.send(self.catalog.query.get_fragments(payload.query_id).await);
             }
             CoordinatorRequest::CreateQuery(r) => {
                 dispatch_blocking!(self, r, query.create_query, |result, request| {

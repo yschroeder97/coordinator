@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 mod worker;
-mod cluster;
-mod utils;
-mod lifecycle;
-mod recovery;
+mod harness;
+mod spec;
+mod runner;
+mod workload;
+mod invariant;
