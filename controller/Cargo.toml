@@ -5,11 +5,9 @@ edition = "2024"
 
 [features]
 testing = ["model/testing"]
-failpoints = ["fail/failpoints"]
-
 [dependencies]
 common.workspace = true
-fail = { workspace = true }
+madsim.workspace = true
 model.workspace = true
 catalog.workspace = true
 tokio.workspace = true

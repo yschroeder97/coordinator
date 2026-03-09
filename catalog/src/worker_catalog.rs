@@ -1,6 +1,7 @@
 use crate::database::Database;
 use crate::notification::{NotificationChannel, Reconcilable};
 use anyhow::{Result, ensure};
+use madsim::buggify::buggify;
 use model::IntoCondition;
 use model::worker::endpoint::HostAddr;
 use model::worker::network_link;
@@ -66,7 +67,9 @@ impl WorkerCatalog {
             }
         }).await?;
 
-        self.listeners.notify_intent();
+        if !buggify() {
+            self.listeners.notify_intent();
+        }
         Ok(worker)
     }
 
@@ -115,7 +118,9 @@ impl WorkerCatalog {
     ) -> Result<worker::Model> {
         worker.current_state = Set(new_state);
         let updated = worker.update(&self.db.conn).await?;
-        self.listeners.notify_state();
+        if !buggify() {
+            self.listeners.notify_state();
+        }
         Ok(updated)
     }
 

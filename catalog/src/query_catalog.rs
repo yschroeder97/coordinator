@@ -1,6 +1,7 @@
 use crate::database::Database;
 use crate::notification::{NotificationChannel, Reconcilable};
 use anyhow::Result;
+use madsim::buggify::buggify;
 use model::query::fragment::{CreateFragment, FragmentState};
 use model::query::query_state::{DesiredQueryState, QueryState};
 use model::query::{CreateQuery, DropQuery, GetQuery, fragment};
@@ -31,7 +32,9 @@ impl QueryCatalog {
                 async move { query::ActiveModel::from(req).insert(&conn).await }
             })
             .await?;
-        self.listeners.notify_intent();
+        if !buggify() {
+            self.listeners.notify_intent();
+        }
         Ok(model)
     }
 
@@ -66,7 +69,9 @@ impl QueryCatalog {
                 }
             })
             .await?;
-        self.listeners.notify_intent();
+        if !buggify() {
+            self.listeners.notify_intent();
+        }
         Ok(updated)
     }
 
@@ -126,7 +131,9 @@ impl QueryCatalog {
                 }
             })
             .await?;
-        self.listeners.notify_state();
+        if !buggify() {
+            self.listeners.notify_state();
+        }
         Ok(result)
     }
 
@@ -205,7 +212,9 @@ impl QueryCatalog {
                 }
             })
             .await?;
-        self.listeners.notify_state();
+        if !buggify() {
+            self.listeners.notify_state();
+        }
         Ok(result)
     }
 
@@ -273,7 +282,9 @@ impl QueryCatalog {
                 }
             })
             .await?;
-        self.listeners.notify_state();
+        if !buggify() {
+            self.listeners.notify_state();
+        }
         Ok(result)
     }
 }

@@ -39,7 +39,6 @@ madsim = { version = "0.2.34", features = ["macros"] }
 tonic = { version = "0.5.1", package = "madsim-tonic" }
 prost = "=0.13.4"
 flume = "0.12"
-fail = "0.5"
 itertools = "0.14"
 tonic-build = { version = "0.5", package = "madsim-tonic-build" }
 

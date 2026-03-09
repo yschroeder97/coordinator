@@ -5,9 +5,11 @@ use crate::query::lifecycle::planned::Planned;
 use crate::query::lifecycle::registered::Registered;
 use crate::query::lifecycle::running::Running;
 use catalog::Catalog;
+use madsim::buggify::buggify;
 use model::query;
 use model::query::StopMode;
 use model::query::query_state::QueryState;
+use std::time::Duration;
 use tracing::{info, info_span, warn};
 
 pub(crate) enum QueryStateInternal {
@@ -105,6 +107,9 @@ async fn try_transition<T: Transition>(
     stop_rx: &mut flume::Receiver<StopMode>,
     span: &tracing::Span,
 ) -> QueryStateInternal {
+    if buggify() {
+        panic!("buggify: reconciler_try_transition_panic");
+    }
     tokio::select! {
         result = state.transition(ctx) => {
             let _guard = span.enter();
@@ -127,6 +132,9 @@ async fn try_transition<T: Transition>(
             }
         },
         Ok(mode) = stop_rx.recv_async() => {
+            if buggify() {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
             let _guard = span.enter();
             info!(?mode, "Stopping query");
             drop(_guard);

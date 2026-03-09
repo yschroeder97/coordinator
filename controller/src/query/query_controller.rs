@@ -14,7 +14,7 @@ use std::time::Duration;
 use common::supervised::supervised;
 use tracing::{debug, error, info, warn};
 
-pub const QUERY_CONTROLLER_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const QUERY_CONTROLLER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct QueryController {
     catalog: Arc<Catalog>,

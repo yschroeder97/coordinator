@@ -1,7 +1,7 @@
 use crate::query::context::QueryContext;
 use crate::query::lifecycle::planned::Planned;
 use crate::query::query_task::Transition;
-use fail::fail_point;
+use madsim::buggify::buggify;
 use model::query::StopMode;
 
 pub(crate) struct Pending;
@@ -19,15 +19,18 @@ impl Transition for Pending {
         #[cfg(not(feature = "testing"))]
         let requests: Vec<model::query::fragment::CreateFragment> = Vec::new();
 
-        fail_point!("reconciler_create_fragments", |_| Err(anyhow::anyhow!(
-            "injected: reconciler_create_fragments"
-        )));
+        if buggify() {
+            return Err(anyhow::anyhow!("buggify: pending_create_fragments"));
+        }
         let (query, fragments) = ctx
             .catalog
             .query
             .create_fragments(&ctx.query, requests)
             .await?;
         ctx.query = query;
+        if buggify() && fragments.is_empty() {
+            panic!("buggify: pending_corrupt_fragment_count");
+        }
         Ok(Planned { fragments })
     }
 

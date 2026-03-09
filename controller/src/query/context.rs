@@ -6,6 +6,7 @@ use crate::worker::worker_registry::{WorkerError, WorkerRegistryHandle};
 use crate::query::retry::RetryPolicy;
 use catalog::Catalog;
 use futures_util::future;
+use madsim::buggify::buggify;
 use model::Set;
 use model::query;
 use model::query::StopMode;
@@ -35,8 +36,12 @@ impl QueryContext {
         let futures = fragments
             .iter()
             .map(|fragment| retry.execute(&self.worker_registry, mk_rpc, fragment));
-        // join_all preserves input order: results[i] corresponds to fragments[i].
-        future::join_all(futures).await
+        let mut results = future::join_all(futures).await;
+        if buggify() && !results.is_empty() {
+            let idx = results.len() / 2;
+            results[idx] = Err(WorkerError::ClientUnavailable(fragments[idx].grpc_addr.clone()));
+        }
+        results
     }
 
     pub(crate) async fn register_fragments(
@@ -126,6 +131,10 @@ impl QueryContext {
             .next()
             .expect("Cannot advance a terminal fragment state");
 
+        if buggify() {
+            panic!("buggify: apply_rpc_skip_persist");
+        }
+
         let updates = fragments
             .iter()
             .zip(results)
@@ -190,6 +199,9 @@ impl QueryContext {
     }
 
     pub(crate) async fn persist_failed(&mut self, error: String) {
+        if buggify() {
+            panic!("buggify: persist_failed_panic");
+        }
         match self
             .catalog
             .query

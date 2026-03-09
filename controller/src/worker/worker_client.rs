@@ -1,4 +1,5 @@
 use common::request::Request;
+use madsim::buggify::buggify;
 use model::query::StopMode;
 use model::query::fragment::FragmentId;
 use model::worker::endpoint::GrpcAddr;
@@ -132,6 +133,10 @@ impl WorkerClient {
         }
 
         while let Ok(rpc) = self.rpc_listener.recv_async().await {
+            if buggify() {
+                warn!("buggify: dropping RPC");
+                continue;
+            }
             let mut client = self.client.clone();
             match rpc {
                 Rpc::RegisterFragment(Request {
@@ -206,10 +211,10 @@ impl WorkerClient {
     }
 }
 
-pub const RPC_TIMEOUT: Duration = Duration::from_secs(5);
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-pub const CONNECT_INITIAL_BACKOFF_MS: u64 = 100;
-pub const CONNECT_MAX_RETRIES: usize = 8;
+pub(crate) const RPC_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const CONNECT_INITIAL_BACKOFF_MS: u64 = 100;
+pub(crate) const CONNECT_MAX_RETRIES: usize = 8;
 
 fn connect_retry_strategy() -> impl Iterator<Item = Duration> {
     ExponentialBackoff::from_millis(CONNECT_INITIAL_BACKOFF_MS)

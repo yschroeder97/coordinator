@@ -5,15 +5,15 @@ use crate::worker::worker_registry::WorkerRegistry;
 use catalog::Reconcilable;
 use catalog::worker_catalog::WorkerCatalog;
 use model::worker::endpoint::GrpcAddr;
+use madsim::buggify::buggify;
 use model::worker::{self, DesiredWorkerState, WorkerState};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use fail::fail_point;
 use tokio::task::JoinError;
 use tracing::{debug, error, info, warn};
 
-pub const WORKER_SERVICE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const WORKER_SERVICE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 enum WorkerStateInternal {
     Connecting {
@@ -43,7 +43,9 @@ impl WorkerStateInternal {
                 debug!("Aborted pending connection for worker {}", addr);
             }
             Active { .. } => {
-                registry.unregister(addr);
+                if !buggify() {
+                    registry.unregister(addr);
+                }
                 info!("Removed active worker {}", addr);
             }
         }
@@ -115,6 +117,9 @@ impl WorkerController {
     }
 
     async fn reconcile(&mut self) {
+        if buggify() {
+            return;
+        }
         let mismatched_workers = match self.worker_catalog.get_mismatch().await {
             Ok(workers) => workers,
             Err(e) => {
@@ -172,7 +177,9 @@ impl WorkerController {
             }
         };
 
-        fail_point!("worker_controller_pre_activate");
+        if buggify() {
+            panic!("buggify: worker_pre_activate");
+        }
 
         let updated = self
             .worker_catalog
@@ -180,6 +187,9 @@ impl WorkerController {
             .await
             .unwrap();
         self.registry.register(addr.clone(), rpc_sender);
+        if buggify() {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
         let task_addr = addr.clone();
         let handle = self.active.spawn(async move {
             client.run().await;
@@ -204,6 +214,9 @@ impl WorkerController {
     }
 
     async fn on_connect_err(&mut self, err: WorkerClientErr) {
+        if buggify() {
+            panic!("buggify: worker_connect_err_panic");
+        }
         error!("Failed to connect to worker: {:?}", err);
         let addr = err.addr().clone();
         let model = match self.workers.remove(&addr) {

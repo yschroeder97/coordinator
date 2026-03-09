@@ -2,6 +2,7 @@ use crate::worker::worker_client::{Rpc, WorkerClientErr};
 use crate::worker::worker_registry::{WorkerError, WorkerRegistryHandle};
 use catalog::Catalog;
 use common::error::Retryable;
+use madsim::buggify::buggify;
 use model::query::fragment::{self, FragmentId};
 use model::worker::endpoint::HostAddr;
 use model::worker::{DesiredWorkerState, GetWorker};
@@ -11,8 +12,8 @@ use tokio::sync::oneshot;
 use tokio_retry::RetryIf;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 
-pub const MAX_RPC_ATTEMPTS: usize = 5;
-pub const RPC_RETRY_BASE_MS: u64 = 50;
+const MAX_RPC_ATTEMPTS: usize = 5;
+const RPC_RETRY_BASE_MS: u64 = 50;
 const ROLLBACK_RETRY_MAX: Duration = Duration::from_secs(30);
 
 pub(crate) enum RetryPolicy {
@@ -46,6 +47,9 @@ impl RetryPolicy {
         F: Fn(FragmentId) -> (oneshot::Receiver<Result<Rsp, WorkerClientErr>>, Rpc),
         Rsp: Send + 'static,
     {
+        if buggify() {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
         let (rx, rpc) = mk_rpc(fragment.id);
         let result = async {
             registry.send(&fragment.grpc_addr, rpc).await?;
@@ -54,6 +58,12 @@ impl RetryPolicy {
                 .map_err(WorkerError::from)
         }
         .await;
+
+        let result = if buggify() && result.is_ok() {
+            Err(WorkerError::ClientUnavailable(fragment.grpc_addr.clone()))
+        } else {
+            result
+        };
 
         match result {
             Err(e) if e.retryable() => {

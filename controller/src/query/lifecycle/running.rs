@@ -7,6 +7,7 @@ use crate::query::context::QueryContext;
 use crate::query::query_task::Transition;
 use crate::query::retry::RetryPolicy;
 use common::error::Retryable;
+use madsim::buggify::buggify;
 use model::Set;
 use model::query::StopMode;
 use model::query::fragment::{self, FragmentError, FragmentState};
@@ -108,6 +109,9 @@ impl Transition for Running {
 
     async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Completed> {
         loop {
+            if buggify() {
+                panic!("buggify: running_poll_panic");
+            }
             let results = self.poll_fragment_status(ctx).await;
 
             let updates: Vec<_> = self
@@ -155,7 +159,9 @@ impl Transition for Running {
                 return Ok(Completed);
             }
 
-            // Poll again in 5s
+            if buggify() {
+                tokio::time::sleep(QUERY_POLL_INTERVAL * 3).await;
+            }
             tokio::time::sleep(QUERY_POLL_INTERVAL).await;
         }
     }
