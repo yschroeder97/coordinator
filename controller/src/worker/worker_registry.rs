@@ -1,4 +1,4 @@
-use crate::cluster::worker_client::{Rpc, WorkerClientErr};
+use crate::worker::worker_client::{Rpc, WorkerClientErr};
 use common::error::Retryable;
 use model::query::fragment::FragmentError;
 use model::worker::endpoint::{GrpcAddr, HostAddr};

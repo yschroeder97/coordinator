@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 tokio.workspace = true
 sea-orm.workspace = true
+futures-util = "0.3"

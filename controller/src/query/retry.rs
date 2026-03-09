@@ -1,5 +1,5 @@
-use crate::cluster::worker_client::{Rpc, WorkerClientErr};
-use crate::cluster::worker_registry::{WorkerError, WorkerRegistryHandle};
+use crate::worker::worker_client::{Rpc, WorkerClientErr};
+use crate::worker::worker_registry::{WorkerError, WorkerRegistryHandle};
 use catalog::Catalog;
 use common::error::Retryable;
 use model::query::fragment::{self, FragmentId};

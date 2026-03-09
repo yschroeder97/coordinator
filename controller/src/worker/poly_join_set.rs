@@ -2,11 +2,12 @@
 use tokio::task::JoinHandle;
 
 #[cfg(not(madsim))]
-pub(crate) use tokio::task::JoinSet;
+pub use tokio::task::JoinSet;
 
 #[cfg(madsim)]
-pub(crate) struct JoinSet<T> {
+pub struct JoinSet<T> {
     tasks: futures_util::stream::FuturesUnordered<JoinHandle<T>>,
+    abort_handles: Vec<tokio::task::AbortHandle>,
 }
 
 #[cfg(madsim)]
@@ -14,6 +15,7 @@ impl<T> JoinSet<T> {
     pub fn new() -> Self {
         Self {
             tasks: futures_util::stream::FuturesUnordered::new(),
+            abort_handles: Vec::new(),
         }
     }
 
@@ -23,9 +25,10 @@ impl<T> JoinSet<T> {
         T: Send + 'static,
     {
         let handle = tokio::spawn(task);
-        let abort_handle = AbortHandle(handle.abort_handle());
+        let abort_handle = handle.abort_handle();
+        self.abort_handles.push(abort_handle.clone());
         self.tasks.push(handle);
-        abort_handle
+        AbortHandle(abort_handle)
     }
 
     pub async fn join_next(&mut self) -> Option<Result<T, tokio::task::JoinError>> {
@@ -45,16 +48,31 @@ impl<T> JoinSet<T> {
     }
 }
 
+// Dropping a madsim JoinHandle detaches the task instead of aborting it.
+// We must abort explicitly to match tokio::task::JoinSet's drop semantics.
+#[cfg(madsim)]
+impl<T> Drop for JoinSet<T> {
+    fn drop(&mut self) {
+        for handle in &self.abort_handles {
+            handle.abort();
+        }
+    }
+}
+
 #[cfg(madsim)]
 #[derive(Debug)]
-pub(crate) struct AbortHandle(tokio::task::AbortHandle);
+pub struct AbortHandle(tokio::task::AbortHandle);
 
 #[cfg(madsim)]
 impl AbortHandle {
     pub fn abort(&self) {
         self.0.abort()
     }
+
+    pub fn is_finished(&self) -> bool {
+        self.0.is_finished()
+    }
 }
 
 #[cfg(not(madsim))]
-pub(crate) use tokio::task::AbortHandle;
+pub use tokio::task::AbortHandle;

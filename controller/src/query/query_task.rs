@@ -62,6 +62,12 @@ impl QueryStateInternal {
     }
 }
 
+impl From<Pending> for QueryStateInternal {
+    fn from(s: Pending) -> Self {
+        QueryStateInternal::Pending(s)
+    }
+}
+
 impl From<Planned> for QueryStateInternal {
     fn from(s: Planned) -> Self {
         QueryStateInternal::Planned(s)
@@ -89,8 +95,6 @@ impl From<Completed> for QueryStateInternal {
 pub(crate) trait Transition: Sized {
     type Next: Into<QueryStateInternal>;
 
-    const STATE: QueryState;
-
     async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Self::Next>;
     async fn rollback(self, ctx: &mut QueryContext, mode: StopMode);
 }
@@ -107,15 +111,15 @@ async fn try_transition<T: Transition>(
             match result {
                 Ok(next) => {
                     let next = next.into();
-                    info!(from = %T::STATE, to = %QueryState::from(&next), "Transition succeeded");
+                    info!(from = %ctx.query.current_state, to = %QueryState::from(&next), "Transition succeeded");
                     next
                 }
                 Err(e) => {
                     drop(_guard);
                     state.rollback(ctx, StopMode::Forceful).await;
                     let _guard = span.enter();
+                    warn!("Transition failed: {e:#}");
                     if ctx.query.error.is_none() {
-                        warn!("Transition failed: {e:#}");
                         ctx.persist_failed(format!("{e:#}")).await;
                     }
                     QueryStateInternal::Failed
@@ -150,17 +154,17 @@ impl QueryReconciler {
         let mut state = QueryStateInternal::from_current(&ctx.query, &ctx.catalog).await;
         loop {
             state = match state {
-                QueryStateInternal::Pending(s) => {
-                    try_transition(s, &mut ctx, &mut stop_rx, &span).await
+                QueryStateInternal::Pending(pending) => {
+                    try_transition(pending, &mut ctx, &mut stop_rx, &span).await
                 }
-                QueryStateInternal::Planned(s) => {
-                    try_transition(s, &mut ctx, &mut stop_rx, &span).await
+                QueryStateInternal::Planned(planned) => {
+                    try_transition(planned, &mut ctx, &mut stop_rx, &span).await
                 }
-                QueryStateInternal::Registered(s) => {
-                    try_transition(s, &mut ctx, &mut stop_rx, &span).await
+                QueryStateInternal::Registered(registered) => {
+                    try_transition(registered, &mut ctx, &mut stop_rx, &span).await
                 }
-                QueryStateInternal::Running(s) => {
-                    try_transition(s, &mut ctx, &mut stop_rx, &span).await
+                QueryStateInternal::Running(running) => {
+                    try_transition(running, &mut ctx, &mut stop_rx, &span).await
                 }
                 terminal => {
                     let _guard = span.enter();
