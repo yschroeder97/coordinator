@@ -1210,7 +1210,7 @@ Here are three examples of how this could be utilized:
 **1. Dashboarding: Cluster-Wide Throughput**
 Aggregating performance metrics from all workers to visualize total system throughput in real-time.
 ```sql
--- Calculate the total records processed per second across the entire cluster
+-- Calculate the total records processed per second across the entire worker
 SELECT start, end, SUM(recordsProcessed) AS totalThroughput
 FROM worker_statistics
 WINDOW TUMBLING(size = 5s)
