@@ -1,13 +1,13 @@
 #![cfg(madsim)]
 use crate::worker::{HealthServer, HealthServiceImpl, SingleNodeWorker, WorkerRpcServiceServer};
 use anyhow::Result;
-use controller::cluster::service::CLUSTER_SERVICE_POLLING_DURATION;
-use controller::cluster::worker_client::{CONNECT_INITIAL_BACKOFF_MS, CONNECT_MAX_RETRIES, CONNECT_TIMEOUT, RPC_TIMEOUT};
+use controller::worker::worker_controller::WORKER_SERVICE_POLL_INTERVAL;
+use controller::worker::worker_client::{CONNECT_INITIAL_BACKOFF_MS, CONNECT_MAX_RETRIES, CONNECT_TIMEOUT, RPC_TIMEOUT};
 use controller::query::MAX_RPC_ATTEMPTS;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use controller::query::service::QUERY_SERVICE_POLLING_DURATION;
+use controller::query::query_controller::QUERY_CONTROLLER_POLL_INTERVAL;
 use common::request::Request;
 use coordinator::coordinator::{CoordinatorRequest, start_for_test};
 use futures::future::join_all;
@@ -62,7 +62,7 @@ pub const fn worker_recovery_deadline() -> Duration {
     Duration::from_secs(
         connect_attempts_secs
             + backoff_total_ms / 1000
-            + CLUSTER_SERVICE_POLLING_DURATION.as_secs()
+            + WORKER_SERVICE_POLL_INTERVAL.as_secs()
             + CONNECT_TIMEOUT.as_secs(),
     )
 }
@@ -78,7 +78,7 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub const fn query_reconciliation_deadline() -> Duration {
     let max_broadcast_secs = MAX_RPC_ATTEMPTS as u64 * RPC_TIMEOUT.as_secs();
     Duration::from_secs(
-        2 * QUERY_SERVICE_POLLING_DURATION.as_secs() + 3 * max_broadcast_secs,
+        2 * QUERY_CONTROLLER_POLL_INTERVAL.as_secs() + 3 * max_broadcast_secs,
     )
 }
 

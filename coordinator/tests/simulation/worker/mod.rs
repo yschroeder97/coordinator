@@ -6,8 +6,8 @@ use tonic::metadata::MetadataMap;
 use tonic::{Code, Request, Response, Status};
 use tracing::{debug, error, instrument};
 
-use controller::cluster::health_monitor::health_proto;
-use controller::cluster::worker_client::worker_rpc_service;
+use controller::worker::health_monitor::health_proto;
+use controller::worker::worker_client::worker_rpc_service;
 
 use worker_rpc_service::worker_rpc_service_server::WorkerRpcService;
 #[allow(unused_imports)]

@@ -1,21 +1,18 @@
 #![cfg(madsim)]
 use crate::cluster::{Cluster, POLL_INTERVAL};
-use controller::cluster::health_monitor::{FAILURE_THRESHOLD, HEALTH_CHECK_INTERVAL};
-use controller::cluster::service::CLUSTER_SERVICE_POLLING_DURATION;
+use controller::worker::health_monitor::{HEALTH_CHECK_INTERVAL, PROBE_TIMEOUT};
+use controller::worker::worker_controller::WORKER_SERVICE_POLL_INTERVAL;
 use model::query::GetQuery;
 use model::query::query_state::QueryState;
 use model::worker::endpoint::NetworkAddr;
 use model::worker::{GetWorker, WorkerState};
 use std::time::Duration;
 
-// Upper bound on how long until a killed worker is marked Unreachable:
-// - HealthMonitor probes every HEALTH_CHECK_INTERVAL; after FAILURE_THRESHOLD
-//   consecutive failures the worker transitions to Unreachable
-// - ClusterService must poll once more to propagate the state change
 pub(crate) const fn worker_unreachable_deadline() -> Duration {
     Duration::from_secs(
-        FAILURE_THRESHOLD as u64 * HEALTH_CHECK_INTERVAL.as_secs()
-            + CLUSTER_SERVICE_POLLING_DURATION.as_secs(),
+        HEALTH_CHECK_INTERVAL.as_secs()
+            + PROBE_TIMEOUT.as_secs()
+            + WORKER_SERVICE_POLL_INTERVAL.as_secs(),
     )
 }
 

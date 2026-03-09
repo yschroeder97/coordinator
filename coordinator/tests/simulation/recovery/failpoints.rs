@@ -1,7 +1,9 @@
 #![cfg(madsim)]
-use crate::cluster::{Cluster, arb_query, arb_topology, query_reconciliation_deadline};
-use crate::utils::poll_query_state;
+use crate::cluster::{Cluster, arb_query, arb_topology, arb_topology_min, query_reconciliation_deadline, worker_recovery_deadline};
+use crate::utils::{poll_query_state, poll_worker_state, worker_unreachable_deadline};
+use madsim::rand::{Rng, thread_rng};
 use model::query::query_state::QueryState;
+use model::worker::WorkerState;
 
 #[madsim::test]
 async fn recovery_after_pre_register_crash() {
@@ -82,4 +84,25 @@ async fn error_during_create_fragments_fails_query() {
     .await;
     assert_eq!(query.current_state, QueryState::Failed);
     assert!(query.error.is_some());
+}
+
+#[madsim::test]
+async fn recovery_after_worker_activate_crash() {
+    let cluster = Cluster::setup(arb_topology_min(2)).await;
+
+    let kill_idx = thread_rng().gen_range(0..cluster.num_workers());
+    let kill_name = cluster.worker_name(kill_idx);
+    let kill_host = cluster.worker_host(kill_idx);
+
+    cluster.simple_kill_nodes(vec![&kill_name]).await;
+    poll_worker_state(&cluster, &kill_host, WorkerState::Unreachable, worker_unreachable_deadline()).await;
+
+    fail::cfg(
+        "worker_controller_pre_activate",
+        "1*panic(injected pre-activate crash)",
+    )
+    .unwrap();
+
+    cluster.simple_restart_nodes(vec![&kill_name]).await;
+    poll_worker_state(&cluster, &kill_host, WorkerState::Active, worker_recovery_deadline()).await;
 }

@@ -1,12 +1,12 @@
 use crate::request_handler::RequestHandler;
 use anyhow::Result;
 use catalog::Catalog;
-use catalog::database::StateBackend;
-use controller::cluster::health_monitor::HealthMonitor;
-use controller::cluster::service::ClusterService;
+use catalog::database::{Database, StateBackend};
+use controller::worker::health_monitor::HealthMonitor;
+use controller::worker::worker_controller::WorkerController;
 use common::into_request;
 use common::request::Request;
-use controller::query::service::QueryService;
+use controller::query::query_controller::QueryController;
 use model::query;
 use model::query::{CreateQuery, DropQuery, GetQuery};
 use model::sink::{self, CreateSink, DropSink, GetSink};
@@ -17,23 +17,14 @@ use model::source::physical_source::{
     self, CreatePhysicalSource, DropPhysicalSource, GetPhysicalSource,
 };
 use model::worker::{self, CreateWorker, DropWorker, GetWorker};
-use controller::cluster::worker_registry::WorkerRegistry;
+use controller::worker::worker_registry::WorkerRegistry;
+use controller::worker::poly_join_set::JoinSet;
+use std::pin::Pin;
+use strum::Display;
 use std::sync::Arc;
-use tokio::task::JoinHandle;
-use tracing::{error, info, warn};
+use tracing::{Instrument, error, info, info_span};
 
-#[cfg(madsim)]
-async fn supervised<F: std::future::Future<Output = ()>>(fut: F) -> bool {
-    use futures_util::FutureExt;
-    use std::panic::AssertUnwindSafe;
-    AssertUnwindSafe(fut).catch_unwind().await.is_err()
-}
-
-#[cfg(not(madsim))]
-async fn supervised<F: std::future::Future<Output = ()>>(fut: F) -> bool {
-    fut.await;
-    false
-}
+use common::supervised::supervised;
 
 pub(crate) type CreateLogicalSourceRequest = Request<CreateLogicalSource, Result<logical_source::Model>>;
 pub(crate) type CreatePhysicalSourceRequest =
@@ -117,74 +108,87 @@ into_request!(GetWorker, GetWorkerRequest, CoordinatorRequest);
 
 const DEFAULT_CAPACITY: usize = 16;
 
-fn spawn_service<S: controller::Supervisable>(service: S) -> JoinHandle<bool> {
-    tokio::spawn(supervised(service.start()))
+#[derive(Debug, Clone, Copy, Display)]
+enum Service {
+    WorkerController,
+    HealthMonitor,
+    QueryController,
+    RequestHandler,
 }
 
-fn panicked(result: &std::result::Result<bool, tokio::task::JoinError>) -> bool {
-    match result {
-        Ok(true) => true,
-        Err(e) if e.is_panic() => true,
-        _ => false,
-    }
-}
+const SERVICES: [Service; 4] = [
+    Service::WorkerController,
+    Service::HealthMonitor,
+    Service::QueryController,
+    Service::RequestHandler,
+];
 
-async fn supervise(
+struct Supervisor {
     catalog: Arc<Catalog>,
     registry: WorkerRegistry,
     receiver: flume::Receiver<CoordinatorRequest>,
-) {
-    let spawn_cluster = || {
-        spawn_service(ClusterService::new(catalog.worker.clone(), registry.clone()))
-    };
-    let spawn_health = || spawn_service(HealthMonitor::new(catalog.worker.clone()));
-    let spawn_query = || {
-        spawn_service(QueryService::new(catalog.clone(), registry.handle()))
-    };
-    let spawn_request = || {
-        spawn_service(RequestHandler::new(receiver.clone(), catalog.clone()))
-    };
+    services: JoinSet<(Service, bool)>,
+}
 
-    let mut cluster = spawn_cluster();
-    let mut health = spawn_health();
-    let mut query = spawn_query();
-    let mut request = spawn_request();
+impl Supervisor {
+    fn new(
+        catalog: Arc<Catalog>,
+        registry: WorkerRegistry,
+        receiver: flume::Receiver<CoordinatorRequest>,
+    ) -> Self {
+        Self {
+            catalog,
+            registry,
+            receiver,
+            services: JoinSet::new(),
+        }
+    }
 
-    loop {
-        tokio::select! {
-            result = &mut cluster => {
-                if panicked(&result) {
-                    error!("ClusterService panicked, restarting");
-                    cluster = spawn_cluster();
-                } else {
-                    warn!("ClusterService exited: {result:?}");
+    fn spawn(&mut self, svc: Service) {
+        // Returns a future that wraps the service
+        let fut: Pin<Box<dyn Future<Output = ()> + Send>> = match svc {
+            Service::WorkerController => Box::pin(
+                WorkerController::new(self.catalog.worker.clone(), self.registry.clone())
+                    .run()
+                    .instrument(info_span!("WorkerController")),
+            ),
+            Service::HealthMonitor => Box::pin(
+                HealthMonitor::new(self.catalog.worker.clone())
+                    .run()
+                    .instrument(info_span!("HealthMonitor")),
+            ),
+            Service::QueryController => Box::pin(
+                QueryController::new(self.catalog.clone(), self.registry.handle())
+                    .run()
+                    .instrument(info_span!("QueryController")),
+            ),
+            Service::RequestHandler => Box::pin(
+                RequestHandler::new(self.receiver.clone(), self.catalog.clone())
+                    .run()
+                    .instrument(info_span!("RequestHandler")),
+            ),
+        };
+        self.services
+            .spawn(async move { (svc, supervised(fut).await) });
+    }
+
+    async fn run(mut self) {
+        for svc in SERVICES {
+            self.spawn(svc);
+        }
+
+        while let Some(result) = self.services.join_next().await {
+            match result {
+                Ok((svc, true)) => {
+                    error!("{svc} panicked, restarting");
+                    self.spawn(svc);
+                }
+                Ok((svc, false)) => {
+                    info!("{svc} exited, shutting down");
                     break;
                 }
-            }
-            result = &mut health => {
-                if panicked(&result) {
-                    error!("HealthMonitor panicked, restarting");
-                    health = spawn_health();
-                } else {
-                    warn!("HealthMonitor exited: {result:?}");
-                    break;
-                }
-            }
-            result = &mut query => {
-                if panicked(&result) {
-                    error!("QueryService panicked, restarting");
-                    query = spawn_query();
-                } else {
-                    warn!("QueryService exited: {result:?}");
-                    break;
-                }
-            }
-            result = &mut request => {
-                if panicked(&result) {
-                    error!("RequestHandler panicked, restarting");
-                    request = spawn_request();
-                } else {
-                    info!("RequestHandler exited, shutting down");
+                Err(e) => {
+                    error!("Service task failed: {e}");
                     break;
                 }
             }
@@ -194,27 +198,27 @@ async fn supervise(
 
 #[cfg(not(madsim))]
 pub fn start(
-    state_backend: StateBackend,
-    batch_size: Option<usize>,
+    state_backend: Option<StateBackend>,
+    request_buffer_size: Option<usize>,
 ) -> flume::Sender<CoordinatorRequest> {
     info!("Starting");
-    let (handle, receiver) = flume::bounded(batch_size.unwrap_or(DEFAULT_CAPACITY));
+    let (handle, receiver) = flume::bounded(request_buffer_size.unwrap_or(DEFAULT_CAPACITY));
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_time()
             .enable_io()
             .build()
-            .expect("Failed to create Tokio Runtime");
+            .expect("failed to create runtime");
 
         rt.block_on(async move {
-            let state = catalog::database::Database::with(state_backend)
+            let state = Database::with(state_backend.unwrap_or_default())
                 .await
-                .expect("Failed to create database state");
+                .expect("failed to create database state");
             let catalog = Catalog::from(state);
             let registry = WorkerRegistry::default();
 
-            supervise(catalog, registry, receiver).await
+            Supervisor::new(catalog, registry, receiver).run().await
         });
 
         rt.shutdown_background();
@@ -231,7 +235,7 @@ pub async fn start_for_test() -> flume::Sender<CoordinatorRequest> {
     let catalog = Catalog::for_test().await;
     let registry = WorkerRegistry::default();
 
-    tokio::spawn(supervise(catalog, registry, receiver));
+    tokio::spawn(Supervisor::new(catalog, registry, receiver).run());
 
     handle
 }

@@ -1,8 +1,10 @@
 use tokio::sync::watch;
 
 pub(crate) struct NotificationChannel {
+    // Notifies subscribers when the intent changes (something should happen)
     intent_tx: watch::Sender<()>,
     intent_rx: watch::Receiver<()>,
+    // Notifies subscribers when the state changes (something has happened)
     state_tx: watch::Sender<()>,
     state_rx: watch::Receiver<()>,
 }

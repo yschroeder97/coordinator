@@ -281,13 +281,6 @@ impl MigrationTrait for Migration {
                             .on_delete(ForeignKeyAction::Cascade)
                             .on_update(ForeignKeyAction::Restrict),
                     )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(Fragment::Table, Fragment::HostAddr)
-                            .to(Worker::Table, Worker::HostAddr)
-                            .on_delete(ForeignKeyAction::Restrict)
-                            .on_update(ForeignKeyAction::Restrict),
-                    )
                     .to_owned(),
             )
             .await?;

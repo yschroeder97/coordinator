@@ -138,3 +138,37 @@ CREATE TRIGGER derive_query_state_on_fragment_update
     AFTER UPDATE OF current_state ON fragment
     FOR EACH ROW
     EXECUTE FUNCTION derive_query_state_on_fragment_update();
+
+CREATE OR REPLACE FUNCTION validate_fragment_worker_exists()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM worker WHERE host_addr = NEW.host_addr) THEN
+        RAISE EXCEPTION 'Fragment references non-existent worker';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER validate_fragment_worker_exists
+    BEFORE INSERT ON fragment
+    FOR EACH ROW
+    EXECUTE FUNCTION validate_fragment_worker_exists();
+
+CREATE OR REPLACE FUNCTION prevent_worker_delete_with_active_fragments()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM fragment
+        WHERE host_addr = OLD.host_addr
+        AND current_state NOT IN ('Completed', 'Stopped', 'Failed')
+    ) THEN
+        RAISE EXCEPTION 'Cannot delete worker: non-terminal fragments still reference it';
+    END IF;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER prevent_worker_delete_with_active_fragments
+    BEFORE DELETE ON worker
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_worker_delete_with_active_fragments();

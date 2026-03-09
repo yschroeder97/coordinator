@@ -8,7 +8,9 @@ use tokio_retry::RetryIf;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::warn;
 
+#[derive(Default)]
 pub enum StateBackend {
+    #[default]
     Memory,
     Sqlite {
         endpoint: String,

@@ -97,3 +97,25 @@ BEGIN
     WHERE id = NEW.query_id
     AND (SELECT current_state FROM query WHERE id = NEW.query_id) = 'Failed';
 END;
+
+CREATE TRIGGER IF NOT EXISTS validate_fragment_worker_exists
+    BEFORE INSERT ON fragment
+BEGIN
+    SELECT CASE
+        WHEN NOT EXISTS (SELECT 1 FROM worker WHERE host_addr = NEW.host_addr) THEN
+            RAISE(ABORT, 'Fragment references non-existent worker')
+    END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_worker_delete_with_active_fragments
+    BEFORE DELETE ON worker
+BEGIN
+    SELECT CASE
+        WHEN EXISTS (
+            SELECT 1 FROM fragment
+            WHERE host_addr = OLD.host_addr
+            AND current_state NOT IN ('Completed', 'Stopped', 'Failed')
+        ) THEN
+            RAISE(ABORT, 'Cannot delete worker: non-terminal fragments still reference it')
+    END;
+END;

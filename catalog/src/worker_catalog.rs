@@ -108,7 +108,7 @@ impl WorkerCatalog {
         Ok(model)
     }
 
-    pub async fn update_worker_state(
+    pub async fn set_worker_state(
         &self,
         mut worker: worker::ActiveModel,
         new_state: WorkerState,
@@ -158,7 +158,7 @@ mod tests {
     use crate::testing::test_prop;
     use model::Generate;
     use model::query::CreateQuery;
-    use model::query::fragment::CreateFragment;
+    use model::query::fragment::{self, CreateFragment, FragmentState};
     use model::sink::SinkWithRefs;
     use model::source::physical_source::PhysicalSourceWithRefs;
     use model::worker::topology::CycleDetected;
@@ -226,7 +226,7 @@ mod tests {
 
         catalog
             .worker
-            .update_worker_state(created.into(), WorkerState::Active)
+            .set_worker_state(created.into(), WorkerState::Active)
             .await
             .expect("Mark should succeed");
 
@@ -283,7 +283,7 @@ mod tests {
             .expect("grpc_addr matching another worker's host_addr should be allowed");
     }
 
-    async fn prop_worker_delete_blocked_by_fragments(req: CreateWorker) {
+    async fn prop_worker_delete_blocked_by_active_fragments(req: CreateWorker) {
         let catalog = Catalog::for_test().await;
         catalog.worker.create_worker(req.clone()).await.unwrap();
 
@@ -310,7 +310,46 @@ mod tests {
 
         assert!(
             catalog.worker.delete_worker(&req.host_addr).await.is_err(),
-            "Worker with fragments should not be deletable"
+            "Worker with active fragments should not be deletable"
+        );
+    }
+
+    async fn prop_worker_delete_allowed_with_terminal_fragments(req: CreateWorker) {
+        let catalog = Catalog::for_test().await;
+        catalog.worker.create_worker(req.clone()).await.unwrap();
+
+        let query = catalog
+            .query
+            .create_query(CreateQuery::new("SELECT x FROM y".to_string()))
+            .await
+            .unwrap();
+        let (_, fragments) = catalog
+            .query
+            .create_fragments(
+                &query,
+                vec![CreateFragment {
+                    query_id: query.id,
+                    host_addr: req.host_addr.clone(),
+                    grpc_addr: req.grpc_addr.clone(),
+                    plan: serde_json::json!({}),
+                    used_capacity: 0,
+                    has_source: false,
+                }],
+            )
+            .await
+            .unwrap();
+
+        let mut am: fragment::ActiveModel = fragments[0].clone().into();
+        am.current_state = Set(FragmentState::Failed);
+        catalog
+            .query
+            .update_fragment_states(query.id, vec![am])
+            .await
+            .unwrap();
+
+        assert!(
+            catalog.worker.delete_worker(&req.host_addr).await.is_ok(),
+            "Worker with only terminal fragments should be deletable"
         );
     }
 
@@ -490,7 +529,7 @@ mod tests {
             if i % 2 == 0 {
                 catalog
                     .worker
-                    .update_worker_state(worker.into(), WorkerState::Active)
+                    .set_worker_state(worker.into(), WorkerState::Active)
                     .await
                     .unwrap();
             }
@@ -602,9 +641,16 @@ mod tests {
         }
 
         #[test]
-        fn worker_delete_blocked_by_fragments(req in CreateWorker::generate()) {
+        fn worker_delete_blocked_by_active_fragments(req in CreateWorker::generate()) {
             test_prop(|| async move {
-                prop_worker_delete_blocked_by_fragments(req).await;
+                prop_worker_delete_blocked_by_active_fragments(req).await;
+            });
+        }
+
+        #[test]
+        fn worker_delete_allowed_with_terminal_fragments(req in CreateWorker::generate()) {
+            test_prop(|| async move {
+                prop_worker_delete_allowed_with_terminal_fragments(req).await;
             });
         }
 
