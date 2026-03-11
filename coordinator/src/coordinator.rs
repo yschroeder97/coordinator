@@ -8,7 +8,7 @@ use common::into_request;
 use common::request::Request;
 use controller::query::query_controller::QueryController;
 use model::query;
-use model::query::fragment::{self as fragment, GetFragment};
+use model::query::fragment::{self as fragment};
 use model::query::{CreateQuery, DropQuery, GetQuery};
 use model::sink::{self, CreateSink, DropSink, GetSink};
 use model::source::logical_source::{
@@ -45,9 +45,8 @@ pub(crate) type DropWorkerRequest = Request<DropWorker, Result<worker::Model>>;
 pub(crate) type GetLogicalSourceRequest = Request<GetLogicalSource, Result<Option<logical_source::Model>>>;
 pub(crate) type GetPhysicalSourceRequest = Request<GetPhysicalSource, Result<Vec<physical_source::Model>>>;
 pub(crate) type GetSinkRequest = Request<GetSink, Result<Vec<sink::Model>>>;
-pub(crate) type GetQueryRequest = Request<GetQuery, Result<Vec<query::Model>>>;
+pub(crate) type GetQueryRequest = Request<GetQuery, Result<Vec<(query::Model, Vec<fragment::Model>)>>>;
 pub(crate) type GetWorkerRequest = Request<GetWorker, Result<Vec<worker::Model>>>;
-pub(crate) type GetFragmentRequest = Request<GetFragment, Result<Vec<fragment::Model>>>;
 
 #[derive(Debug)]
 pub enum CoordinatorRequest {
@@ -66,7 +65,6 @@ pub enum CoordinatorRequest {
     GetSink(GetSinkRequest),
     GetQuery(GetQueryRequest),
     GetWorker(GetWorkerRequest),
-    GetFragment(GetFragmentRequest),
 }
 
 into_request!(
@@ -108,7 +106,6 @@ into_request!(
 into_request!(GetSink, GetSinkRequest, CoordinatorRequest);
 into_request!(GetQuery, GetQueryRequest, CoordinatorRequest);
 into_request!(GetWorker, GetWorkerRequest, CoordinatorRequest);
-into_request!(GetFragment, GetFragmentRequest, CoordinatorRequest);
 
 const DEFAULT_CAPACITY: usize = 1024;
 

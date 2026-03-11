@@ -137,6 +137,25 @@ impl QueryCatalog {
         Ok(result)
     }
 
+    pub async fn get_query_with_fragments(
+        &self,
+        req: GetQuery,
+    ) -> Result<Vec<(query::Model, Vec<fragment::Model>)>> {
+        Ok(self
+            .db
+            .with_retry(|conn| {
+                let req = req.clone();
+                async move {
+                    query::Entity::find()
+                        .filter(req.into_condition())
+                        .find_with_related(fragment::Entity)
+                        .all(&conn)
+                        .await
+                }
+            })
+            .await?)
+    }
+
     pub async fn get_fragments(&self, query_id: i64) -> Result<Vec<fragment::Model>> {
         let (_, fragments) = self
             .db
@@ -490,7 +509,7 @@ mod tests {
                     CreateFragment {
                         query_id: query.id,
                         host_addr: worker.host_addr.clone(),
-                        grpc_addr: worker.grpc_addr.clone(),
+                        grpc_addr: worker.grpc_addr,
                         plan: serde_json::json!({}),
                         used_capacity: rest,
                         has_source: false,
@@ -648,7 +667,7 @@ mod tests {
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
         }
-        let created = catalog.query.create_query(req.clone()).await.unwrap();
+        let created = catalog.query.create_query(req).await.unwrap();
         let models = walk_query_via_fragments(&catalog, &created, &setup, &path).await;
 
         for (model, expected_state) in models.iter().zip(path.iter()) {
@@ -691,7 +710,7 @@ mod tests {
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
         }
-        let created = catalog.query.create_query(req.clone()).await.unwrap();
+        let created = catalog.query.create_query(req).await.unwrap();
 
         let non_terminal_path = &path[..path.len() - 1];
         let models = walk_query_via_fragments(&catalog, &created, &setup, non_terminal_path).await;
@@ -979,7 +998,7 @@ mod tests {
             QueryState::Running,
             QueryState::Completed,
         ];
-        for (i, query) in created.clone().into_iter().enumerate() {
+        for (i, query) in created.into_iter().enumerate() {
             if i % 2 == 0 {
                 walk_query_via_fragments(&catalog, &query, &setup, &completed_path).await;
             }

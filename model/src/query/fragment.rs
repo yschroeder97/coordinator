@@ -72,17 +72,6 @@ impl Related<crate::worker::Entity> for Entity {
 impl ActiveModelBehavior for ActiveModel {}
 
 #[derive(Clone, Debug)]
-pub struct GetFragment {
-    pub query_id: i64,
-}
-
-impl GetFragment {
-    pub fn for_query(query_id: i64) -> Self {
-        Self { query_id }
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct CreateFragment {
     pub query_id: i64,
     pub host_addr: HostAddr,
@@ -175,36 +164,18 @@ impl CreateFragment {
     ) -> Vec<CreateFragment> {
         use crate::worker::WorkerState;
 
-        let fragments: Vec<_> = workers
+        workers
             .iter()
-            .filter(|w| w.current_state == WorkerState::Active && w.capacity > 0)
+            .filter(|w| w.current_state == WorkerState::Active)
             .map(|w| CreateFragment {
                 query_id: query.id,
                 host_addr: w.host_addr.clone(),
                 grpc_addr: w.grpc_addr.clone(),
                 plan: serde_json::json!({}),
-                used_capacity: 1,
+                used_capacity: 0,
                 has_source: false,
             })
-            .collect();
-
-        if fragments.is_empty() {
-            workers
-                .first()
-                .map(|w| {
-                    vec![CreateFragment {
-                        query_id: query.id,
-                        host_addr: w.host_addr.clone(),
-                        grpc_addr: w.grpc_addr.clone(),
-                        plan: serde_json::json!({}),
-                        used_capacity: 0,
-                        has_source: false,
-                    }]
-                })
-                .unwrap_or_default()
-        } else {
-            fragments
-        }
+            .collect()
     }
 }
 

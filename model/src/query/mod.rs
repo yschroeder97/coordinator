@@ -166,6 +166,7 @@ pub struct GetQuery {
     pub name: Option<QueryName>,
     pub current_state: Option<QueryState>,
     pub desired_state: Option<DesiredQueryState>,
+    pub with_fragments: bool,
 }
 
 impl GetQuery {
@@ -195,6 +196,11 @@ impl GetQuery {
 
     pub fn with_desired_state(mut self, state: DesiredQueryState) -> Self {
         self.desired_state = Some(state);
+        self
+    }
+
+    pub fn with_fragments(mut self) -> Self {
+        self.with_fragments = true;
         self
     }
 }
