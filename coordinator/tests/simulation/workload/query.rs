@@ -2,61 +2,56 @@
 use crate::harness::{TestHarness, arb};
 use crate::workload::{
     Invariant, InvariantContext, Workload, WorkloadFactory, check_invariants, derive_query_state,
-    generate_weighted, parse_options, sleep_strategy,
+    generate_weighted, parse_options, precompute_delays,
 };
 use async_trait::async_trait;
 use model::query::fragment;
-use model::query::fragment::GetFragment;
-use model::query::query_state::QueryState;
 use model::query::{CreateQuery, DropQuery, GetQuery, StopMode};
+use model::query::query_state::QueryState;
 use model::worker::endpoint::HostAddr;
 use model::worker::GetWorker;
 use model::{query, worker, Generate};
 use proptest::prelude::*;
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::sync::Mutex;
+use model::worker::WorkerState;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, info};
 
+const DEFAULT_NUM_OPS: usize = 15;
+const DEFAULT_TEST_DURATION: f64 = 30.0;
+
 #[derive(Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct QueryConfig {
+    num_ops: usize,
     test_duration: f64,
-    max_sleep_secs: u64,
     create_weight: u32,
     drop_weight: u32,
-    sleep_weight: u32,
-    block_until: String,
 }
 
 impl Default for QueryConfig {
     fn default() -> Self {
         Self {
-            test_duration: 30.0,
-            max_sleep_secs: 5,
+            num_ops: DEFAULT_NUM_OPS,
+            test_duration: DEFAULT_TEST_DURATION,
             create_weight: 3,
             drop_weight: 1,
-            sleep_weight: 1,
-            block_until: "Pending".to_string(),
         }
     }
 }
 
 pub struct QueryWorkload {
+    num_ops: usize,
     test_duration: Duration,
-    max_sleep_secs: u64,
     create_weight: u32,
     drop_weight: u32,
-    sleep_weight: u32,
-    block_until: QueryState,
-    state: Mutex<QueryWorkloadState>,
+    state: RefCell<QueryWorkloadState>,
 }
 
 #[derive(Default)]
 struct QueryWorkloadState {
-    initial_capacities: HashMap<HostAddr, i32>,
-    max_concurrent_queries: usize,
     created_query_ids: Vec<i64>,
     dropped_query_ids: Vec<i64>,
 }
@@ -65,7 +60,6 @@ struct QueryWorkloadState {
 enum QueryOp {
     CreateQuery,
     DropQuery(usize),
-    Sleep(Duration),
 }
 
 struct GeneratorState {
@@ -81,23 +75,14 @@ impl GeneratorState {
         }
     }
 
-    fn active_queries(&self) -> usize {
-        self.created_queries - self.dropped_queries.iter().filter(|&&d| d).count()
-    }
-
     fn valid_ops(
         &self,
-        max_sleep_secs: u64,
         create_weight: u32,
         drop_weight: u32,
-        sleep_weight: u32,
-        max_concurrent: usize,
     ) -> Vec<(u32, BoxedStrategy<QueryOp>)> {
         let mut strategies: Vec<(u32, BoxedStrategy<QueryOp>)> = Vec::new();
 
-        if self.active_queries() < max_concurrent {
-            strategies.push((create_weight, Just(QueryOp::CreateQuery).boxed()));
-        }
+        strategies.push((create_weight, Just(QueryOp::CreateQuery).boxed()));
 
         let droppable: Vec<usize> = self
             .dropped_queries
@@ -115,9 +100,6 @@ impl GeneratorState {
             ));
         }
 
-        let (_, s) = sleep_strategy(max_sleep_secs, QueryOp::Sleep);
-        strategies.push((sleep_weight, s));
-
         strategies
     }
 
@@ -128,7 +110,6 @@ impl GeneratorState {
                 self.dropped_queries.push(false);
             }
             QueryOp::DropQuery(i) => self.dropped_queries[*i] = true,
-            QueryOp::Sleep(_) => {}
         }
     }
 }
@@ -138,32 +119,17 @@ impl QueryWorkload {
 
     pub fn from_options(options: &HashMap<String, toml::Value>) -> Self {
         let c: QueryConfig = parse_options(options);
-        let block_until = match c.block_until.as_str() {
-            "Pending" => QueryState::Pending,
-            "Planned" => QueryState::Planned,
-            "Registered" => QueryState::Registered,
-            "Running" => QueryState::Running,
-            other => panic!("invalid block_until: {other}"),
-        };
         Self {
+            num_ops: c.num_ops,
             test_duration: Duration::from_secs_f64(c.test_duration),
-            max_sleep_secs: c.max_sleep_secs,
             create_weight: c.create_weight,
             drop_weight: c.drop_weight,
-            sleep_weight: c.sleep_weight,
-            block_until,
-            state: Mutex::new(QueryWorkloadState::default()),
+            state: RefCell::new(QueryWorkloadState::default()),
         }
     }
 
-    fn generate_op(&self, gen_state: &mut GeneratorState, max_concurrent: usize) -> QueryOp {
-        let strategies = gen_state.valid_ops(
-            self.max_sleep_secs,
-            self.create_weight,
-            self.drop_weight,
-            self.sleep_weight,
-            max_concurrent,
-        );
+    fn generate_op(&self, gen_state: &mut GeneratorState) -> QueryOp {
+        let strategies = gen_state.valid_ops(self.create_weight, self.drop_weight);
         let op = generate_weighted(strategies);
         gen_state.apply(&op);
         op
@@ -179,7 +145,8 @@ impl QueryWorkload {
     ) {
         match op {
             QueryOp::CreateQuery => {
-                let query = arb(CreateQuery::generate()).block_until(self.block_until);
+                let mut query = arb(CreateQuery::generate());
+                query.block_until = QueryState::Pending;
                 let resp: anyhow::Result<query::Model> = harness.send(query).await;
                 match resp {
                     Ok(q) => {
@@ -209,10 +176,6 @@ impl QueryWorkload {
                     }
                 }
             }
-            QueryOp::Sleep(d) => {
-                debug!("[{i}] sleep {d:?}");
-                tokio::time::sleep(d).await;
-            }
         }
     }
 
@@ -224,74 +187,49 @@ impl Workload for QueryWorkload {
         Self::NAME
     }
 
-    async fn setup(&mut self, harness: &TestHarness) {
-        let workers: Vec<worker::Model> =
-            harness.send(GetWorker::all()).await.unwrap();
-        let max_concurrent = workers
-            .iter()
-            .filter(|w| w.capacity > 0)
-            .map(|w| w.capacity)
-            .min()
-            .unwrap_or(0) as usize;
-        let capacities = workers
-            .into_iter()
-            .map(|w| (w.host_addr, w.capacity))
-            .collect();
-        let mut state = self.state.lock().unwrap();
-        state.initial_capacities = capacities;
-        state.max_concurrent_queries = max_concurrent;
-        info!("max_concurrent_queries={max_concurrent}");
-    }
-
     async fn start(&self, harness: &TestHarness) {
-        let max_concurrent = self.state.lock().unwrap().max_concurrent_queries;
         info!(
-            "running for {:?} (max_concurrent={max_concurrent})",
-            self.test_duration,
+            "{}: running {} ops over {:?}",
+            self.name(), self.num_ops, self.test_duration,
         );
 
+        let delays = precompute_delays(self.num_ops, self.test_duration);
         let mut gen_state = GeneratorState::new();
         let mut created_ids = Vec::new();
         let mut dropped_ids = Vec::new();
-        let mut op_index = 0;
 
-        let _ = tokio::time::timeout(self.test_duration, async {
-            loop {
-                let op = self.generate_op(&mut gen_state, max_concurrent);
-                self.execute_op(harness, op_index, op, &mut created_ids, &mut dropped_ids)
-                    .await;
-                op_index += 1;
-            }
-        })
-        .await;
-        info!("{}: completed {op_index} ops", self.name());
+        for i in 0..self.num_ops {
+            let op = self.generate_op(&mut gen_state);
+            self.execute_op(harness, i, op, &mut created_ids, &mut dropped_ids)
+                .await;
+            tokio::time::sleep(delays[i]).await;
+        }
+        info!("{}: completed {} ops", self.name(), self.num_ops);
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.borrow_mut();
         state.created_query_ids = created_ids;
         state.dropped_query_ids = dropped_ids;
     }
 
     async fn check(&self, harness: &TestHarness) {
-        let (created_ids, dropped_ids, initial_caps) = {
-            let state = self.state.lock().unwrap();
+        let (created_ids, dropped_ids) = {
+            let state = self.state.borrow();
             (
                 state.created_query_ids.clone(),
                 state.dropped_query_ids.clone(),
-                state.initial_capacities.clone(),
             )
         };
 
         let ctx = InvariantContext::new(created_ids, dropped_ids);
-        let caps = CapacityConservation {
-            initial_capacities: initial_caps,
-        };
 
         check_invariants(
             &[
                 &QueryLiveness,
                 &QueryTermination,
+                &TerminalFragmentCleanup,
                 &FragmentCoherence,
-                &caps,
+                &FragmentPlacementValidity,
+                &RpcStateConsistency,
             ],
             harness,
             &ctx,
@@ -309,17 +247,14 @@ impl Invariant for QueryLiveness {
     }
 
     async fn check(&self, harness: &TestHarness, ctx: &InvariantContext) {
-        if ctx.query_ids().is_empty() {
-            return;
-        }
-        let queries: Vec<query::Model> = harness
+        let results: Vec<(query::Model, Vec<fragment::Model>)> = harness
             .send(GetQuery::all().with_ids(ctx.query_ids().to_vec()))
             .await
             .unwrap();
-        let non_settled: Vec<_> = queries
+        let non_settled: Vec<_> = results
             .iter()
-            .filter(|q| q.current_state != QueryState::Running && !q.current_state.is_terminal())
-            .map(|q| (q.id, q.current_state))
+            .filter(|(q, _)| q.current_state != QueryState::Running && !q.current_state.is_terminal())
+            .map(|(q, _)| (q.id, q.current_state))
             .collect();
         assert!(
             non_settled.is_empty(),
@@ -337,15 +272,12 @@ impl Invariant for QueryTermination {
     }
 
     async fn check(&self, harness: &TestHarness, ctx: &InvariantContext) {
-        if ctx.query_ids().is_empty() || ctx.dropped_query_ids().is_empty() {
-            return;
-        }
-        let queries: Vec<query::Model> = harness
+        let results: Vec<(query::Model, Vec<fragment::Model>)> = harness
             .send(GetQuery::all().with_ids(ctx.query_ids().to_vec()))
             .await
             .unwrap();
         for &qid in ctx.dropped_query_ids() {
-            if let Some(q) = queries.iter().find(|q| q.id == qid) {
+            if let Some((q, _)) = results.iter().find(|(q, _)| q.id == qid) {
                 assert!(
                     q.current_state.is_terminal(),
                     "query_termination: dropped query {} in state {:?}",
@@ -366,79 +298,152 @@ impl Invariant for FragmentCoherence {
     }
 
     async fn check(&self, harness: &TestHarness, ctx: &InvariantContext) {
-        if ctx.query_ids().is_empty() {
-            return;
-        }
-        let queries: Vec<query::Model> = harness
-            .send(GetQuery::all().with_ids(ctx.query_ids().to_vec()))
+        let results: Vec<(query::Model, Vec<fragment::Model>)> = harness
+            .send(
+                GetQuery::all()
+                    .with_ids(ctx.query_ids().to_vec())
+                    .with_fragments(),
+            )
             .await
             .unwrap();
-        for &qid in ctx.query_ids() {
-            if let Some(query) = queries.iter().find(|q| q.id == qid) {
-                let fragments: Vec<fragment::Model> =
-                    harness.send(GetFragment::for_query(qid)).await.unwrap();
+        for (query, fragments) in &results {
+            if fragments.is_empty() {
+                continue;
+            }
 
-                if fragments.is_empty() {
-                    continue;
-                }
+            let expected = derive_query_state(fragments, query.current_state);
+            assert_eq!(
+                query.current_state, expected,
+                "fragment_coherence: query {} is {:?} but fragments imply {:?}. fragments: {:?}",
+                query.id,
+                query.current_state,
+                expected,
+                fragments.iter().map(|f| (f.id, f.current_state)).collect::<Vec<_>>()
+            );
+        }
+    }
+}
 
-                let expected = derive_query_state(&fragments, query.current_state);
-                assert_eq!(
-                    query.current_state, expected,
-                    "fragment_coherence: query {qid} is {:?} but fragments imply {:?}. fragments: {:?}",
-                    query.current_state,
-                    expected,
-                    fragments.iter().map(|f| (f.id, f.current_state)).collect::<Vec<_>>()
+pub struct TerminalFragmentCleanup;
+
+#[async_trait(?Send)]
+impl Invariant for TerminalFragmentCleanup {
+    fn name(&self) -> &str {
+        "terminal_fragment_cleanup"
+    }
+
+    async fn check(&self, harness: &TestHarness, ctx: &InvariantContext) {
+        let results: Vec<(query::Model, Vec<fragment::Model>)> = harness
+            .send(
+                GetQuery::all()
+                    .with_ids(ctx.dropped_query_ids().to_vec())
+                    .with_fragments(),
+            )
+            .await
+            .unwrap();
+        for (query, fragments) in &results {
+            for f in fragments {
+                assert!(
+                    f.current_state.is_terminal(),
+                    "terminal_fragment_cleanup: fragment {} of terminal query {} in state {:?}",
+                    f.id,
+                    query.id,
+                    f.current_state
                 );
             }
         }
     }
 }
 
-pub struct CapacityConservation {
-    initial_capacities: HashMap<HostAddr, i32>,
-}
+pub struct RpcStateConsistency;
 
 #[async_trait(?Send)]
-impl Invariant for CapacityConservation {
+impl Invariant for RpcStateConsistency {
     fn name(&self) -> &str {
-        "capacity_conservation"
+        "rpc_state_consistency"
     }
 
     async fn check(&self, harness: &TestHarness, ctx: &InvariantContext) {
-        let queries: Vec<query::Model> = if ctx.query_ids().is_empty() {
-            Vec::new()
-        } else {
-            harness
-                .send(GetQuery::all().with_ids(ctx.query_ids().to_vec()))
-                .await
-                .unwrap()
-        };
-        let workers: Vec<worker::Model> = harness.send(GetWorker::all()).await.unwrap();
+        let results: Vec<(query::Model, Vec<fragment::Model>)> = harness
+            .send(
+                GetQuery::all()
+                    .with_ids(ctx.query_ids().to_vec())
+                    .with_fragments(),
+            )
+            .await
+            .unwrap();
 
-        let mut used_per_worker: HashMap<HostAddr, i32> = HashMap::new();
-        for q in &queries {
-            let fragments: Vec<fragment::Model> =
-                harness.send(GetFragment::for_query(q.id)).await.unwrap();
-            for f in fragments
-                .iter()
-                .filter(|f| !f.current_state.is_terminal())
-            {
-                *used_per_worker.entry(f.host_addr.clone()).or_default() += f.used_capacity;
+        let worker_statuses = harness.query_worker_statuses().await;
+        let mut rpc_active_fragment_ids: HashSet<u64> = HashSet::new();
+        for resp in worker_statuses.values() {
+            for aq in &resp.active_queries {
+                rpc_active_fragment_ids.insert(aq.query_id);
             }
         }
 
-        for w in &workers {
-            if let Some(&initial) = self.initial_capacities.get(&w.host_addr) {
-                let used = used_per_worker.get(&w.host_addr).copied().unwrap_or(0);
-                assert_eq!(
-                    w.capacity + used,
-                    initial,
-                    "capacity_conservation: worker {} capacity={} used={} expected_initial={}",
-                    w.host_addr,
-                    w.capacity,
-                    used,
-                    initial
+        for (q, fragments) in &results {
+            let active_fragment_ids: Vec<u64> = fragments
+                .iter()
+                .filter(|f| !f.current_state.is_terminal())
+                .map(|f| f.id as u64)
+                .collect();
+
+            if q.current_state == QueryState::Running && !active_fragment_ids.is_empty() {
+                let any_on_worker = active_fragment_ids
+                    .iter()
+                    .any(|fid| rpc_active_fragment_ids.contains(fid));
+                assert!(
+                    any_on_worker,
+                    "rpc_state_consistency: query {} is Running with fragments {:?} but no worker reports them active",
+                    q.id, active_fragment_ids
+                );
+            }
+
+            if q.current_state.is_terminal() {
+                for &fid in &active_fragment_ids {
+                    assert!(
+                        !rpc_active_fragment_ids.contains(&fid),
+                        "rpc_state_consistency: terminal query {} has fragment {} still active on a worker",
+                        q.id, fid
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub struct FragmentPlacementValidity;
+
+#[async_trait(?Send)]
+impl Invariant for FragmentPlacementValidity {
+    fn name(&self) -> &str {
+        "fragment_placement_validity"
+    }
+
+    async fn check(&self, harness: &TestHarness, ctx: &InvariantContext) {
+        let workers: Vec<worker::Model> = harness.send(GetWorker::all()).await.unwrap();
+        let active_hosts: HashSet<HostAddr> = workers
+            .iter()
+            .filter(|w| w.current_state == WorkerState::Active)
+            .map(|w| w.host_addr.clone())
+            .collect();
+
+        let results: Vec<(query::Model, Vec<fragment::Model>)> = harness
+            .send(
+                GetQuery::all()
+                    .with_ids(ctx.query_ids().to_vec())
+                    .with_fragments(),
+            )
+            .await
+            .unwrap();
+        for (query, fragments) in &results {
+            for f in fragments.iter().filter(|f| !f.current_state.is_terminal()) {
+                assert!(
+                    active_hosts.contains(&f.host_addr),
+                    "fragment_placement_validity: fragment {} of query {} on non-active worker {}",
+                    f.id,
+                    query.id,
+                    f.host_addr
                 );
             }
         }
