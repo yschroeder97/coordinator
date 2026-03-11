@@ -98,7 +98,7 @@ fn run_trial(spec: spec::TestSpec) {
                 .as_nanos() as u64
         });
 
-    let mut rt = Runtime::with_seed_and_config(seed, madsim::Config::default());
+    let rt = Runtime::with_seed_and_config(seed, madsim::Config::default());
 
     rt.block_on(async {
         runner::run_test(spec).await;

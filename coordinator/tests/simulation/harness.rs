@@ -29,6 +29,7 @@ const DEFAULT_SEND_LATENCY_HI: Duration = Duration::from_millis(100);
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
+const WORKER_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(30);
 const CHACHA_SEED_BYTES: usize = 32;
 const SEED_CHUNK_SIZE: usize = 8;
 
@@ -215,9 +216,9 @@ impl TestHarness {
         }
 
         let num_workers = self.workers.len();
+        let deadline = tokio::time::Instant::now() + WORKER_REGISTRATION_TIMEOUT;
         loop {
             let workers: Vec<worker::Model> = self.send(GetWorker::all()).await.unwrap();
-
             let active_count = workers
                 .iter()
                 .filter(|w| w.current_state == WorkerState::Active)
@@ -227,6 +228,11 @@ impl TestHarness {
                 info!("all {num_workers} workers active");
                 return;
             }
+
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "workers did not become Active within {WORKER_REGISTRATION_TIMEOUT:?} ({active_count}/{num_workers} active)"
+            );
 
             info!("waiting for workers to become active ({active_count}/{num_workers})");
             tokio::time::sleep(POLL_INTERVAL).await;

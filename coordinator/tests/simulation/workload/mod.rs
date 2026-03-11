@@ -40,7 +40,7 @@ pub fn generate_weighted<Op: Clone + Debug>(strategies: Vec<(u32, BoxedStrategy<
     arb(strategy)
 }
 
-pub fn sleep_strategy<Op>(max_secs: u64, wrap: fn(Duration) -> Op) -> (u32, BoxedStrategy<Op>) {
+pub fn sleep_strategy<Op: Debug + 'static>(max_secs: u64, wrap: fn(Duration) -> Op) -> (u32, BoxedStrategy<Op>) {
     (1, (0..=max_secs).prop_map(move |s| wrap(Duration::from_secs(s))).boxed())
 }
 

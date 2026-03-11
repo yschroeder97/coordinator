@@ -2,7 +2,7 @@
 use crate::harness::{TestHarness, arb};
 use crate::workload::{
     Invariant, InvariantContext, Workload, WorkloadFactory, check_invariants, derive_query_state,
-    generate_weighted, parse_options, run_timed_ops, sleep_strategy,
+    generate_weighted, parse_options, sleep_strategy,
 };
 use async_trait::async_trait;
 use model::query::fragment;
@@ -253,12 +253,18 @@ impl Workload for QueryWorkload {
         let mut gen_state = GeneratorState::new();
         let mut created_ids = Vec::new();
         let mut dropped_ids = Vec::new();
+        let mut op_index = 0;
 
-        run_timed_ops(self.test_duration, self.name(), |i| {
-            let op = self.generate_op(&mut gen_state, max_concurrent);
-            Box::pin(self.execute_op(harness, i, op, &mut created_ids, &mut dropped_ids))
+        let _ = tokio::time::timeout(self.test_duration, async {
+            loop {
+                let op = self.generate_op(&mut gen_state, max_concurrent);
+                self.execute_op(harness, op_index, op, &mut created_ids, &mut dropped_ids)
+                    .await;
+                op_index += 1;
+            }
         })
         .await;
+        info!("{}: completed {op_index} ops", self.name());
 
         let mut state = self.state.lock().unwrap();
         state.created_query_ids = created_ids;
