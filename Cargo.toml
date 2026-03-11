@@ -25,7 +25,7 @@ thiserror = "2.0.17"
 anyhow = "1.0"
 sea-orm = { version = "=1.1.1", features = [
     "sqlx-sqlite",
-    "runtime-tokio-native-tls",
+    "runtime-tokio-rustls",
     "macros",
     "debug-print",
     "with-json",
@@ -39,7 +39,6 @@ madsim = { version = "0.2.34", features = ["macros"] }
 tonic = { version = "0.5.1", package = "madsim-tonic" }
 prost = "=0.13.4"
 flume = "0.12"
-itertools = "0.14"
 async-trait = "0.1"
 inventory = "0.3"
 tonic-build = { version = "0.5", package = "madsim-tonic-build" }

@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use common::error::Retryable;
 use migration::{Migrator, MigratorTrait};
 use sea_orm::{ConnectOptions, DatabaseConnection, DbErr};
@@ -13,10 +13,6 @@ pub enum StateBackend {
     #[default]
     Memory,
     Sqlite {
-        endpoint: String,
-        opts: ConnectOptions,
-    },
-    Postgres {
         endpoint: String,
         opts: ConnectOptions,
     },
@@ -59,7 +55,7 @@ impl Database {
                 let conn = sea_orm::Database::connect(opts).await?;
                 Ok(Self { conn })
             }
-            StateBackend::Sqlite { endpoint, opts } => {
+            StateBackend::Sqlite { endpoint: _, opts } => {
                 let mut opts = opts;
                 opts.min_connections(1)
                     .max_connections(1)
@@ -72,7 +68,6 @@ impl Database {
                 let conn = sea_orm::Database::connect(opts).await?;
                 Ok(Self { conn })
             }
-            _ => bail!("Storage backend currently not supported"),
         }
     }
 

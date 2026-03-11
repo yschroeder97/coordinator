@@ -26,7 +26,11 @@ impl MigrationTrait for Migration {
         );
 
         match manager.get_database_backend() {
-            DbBackend::MySql | DbBackend::Postgres => {}
+            DbBackend::MySql | DbBackend::Postgres => {
+                return Err(DbErr::Custom(
+                    "Only SQLite is currently supported".to_string(),
+                ));
+            }
             DbBackend::Sqlite => {
                 manager
                     .get_connection()
@@ -285,13 +289,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        let backend = manager.get_database_backend();
-        if backend == DbBackend::MySql {
-            return Err(DbErr::Custom(
-                "MySQL is currently not supported".to_string(),
-            ));
-        }
-        if let Some(sql) = triggers::up(backend) {
+        if let Some(sql) = triggers::up(manager.get_database_backend()) {
             manager.get_connection().execute_unprepared(sql).await?;
         }
 
