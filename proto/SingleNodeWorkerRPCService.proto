@@ -4,8 +4,6 @@ import "google/protobuf/empty.proto";
 
 service WorkerRPCService {
   rpc RegisterQuery (RegisterQueryRequest) returns (RegisterQueryReply) {}
-  rpc UnregisterQuery (UnregisterQueryRequest) returns (google.protobuf.Empty) {}
-
   rpc StartQuery (StartQueryRequest) returns (google.protobuf.Empty) {}
   rpc StopQuery (StopQueryRequest) returns (google.protobuf.Empty) {}
 
@@ -19,10 +17,6 @@ message RegisterQueryRequest {
 }
 
 message RegisterQueryReply {
-}
-
-message UnregisterQueryRequest {
-  uint64 queryId = 1;
 }
 
 message StartQueryRequest {

@@ -26,10 +26,9 @@ impl Transition for Planned {
         })
     }
 
-    async fn rollback(self, ctx: &mut QueryContext, _mode: StopMode) {
+    async fn rollback(self, _ctx: &mut QueryContext, _mode: StopMode) {
         if buggify() {
             panic!("buggify: planned_rollback_panic");
         }
-        ctx.rollback_unregister(&self.fragments).await;
     }
 }

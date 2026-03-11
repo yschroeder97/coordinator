@@ -27,6 +27,5 @@ impl Transition for Registered {
         if !buggify() {
             ctx.rollback_stop(mode, &self.fragments).await;
         }
-        ctx.rollback_unregister(&self.fragments).await;
     }
 }

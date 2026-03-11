@@ -17,7 +17,7 @@ pub mod worker_rpc_service {
 use worker_rpc_service::worker_rpc_service_client::WorkerRpcServiceClient;
 use worker_rpc_service::{
     QueryStatusRequest, RegisterQueryReply, RegisterQueryRequest, StartQueryRequest,
-    StopQueryRequest, UnregisterQueryRequest,
+    StopQueryRequest,
 };
 
 pub(crate) use worker_rpc_service::Error as FragmentError;
@@ -52,7 +52,6 @@ pub(crate) type RegisterFragmentRequest =
     Request<FragmentId, Result<RegisterQueryReply, WorkerClientErr>>;
 pub(crate) type StartFragmentRequest = Request<FragmentId, Result<(), WorkerClientErr>>;
 pub(crate) type StopFragmentRequest = Request<(FragmentId, StopMode), Result<(), WorkerClientErr>>;
-pub(crate) type UnregisterFragmentRequest = Request<FragmentId, Result<(), WorkerClientErr>>;
 pub(crate) type GetFragmentStatusRequest =
     Request<FragmentId, Result<QueryStatusReply, WorkerClientErr>>;
 
@@ -60,11 +59,9 @@ pub(crate) enum Rpc {
     RegisterFragment(RegisterFragmentRequest),
     StartFragment(StartFragmentRequest),
     StopFragment(StopFragmentRequest),
-    UnregisterFragment(UnregisterFragmentRequest),
     GetFragmentStatus(GetFragmentStatusRequest),
 }
 
-#[derive(Debug)]
 pub(crate) struct WorkerClient {
     grpc_addr: GrpcAddr,
     rpc_listener: flume::Receiver<Rpc>,
@@ -176,19 +173,6 @@ impl WorkerClient {
                         StopQueryRequest {
                             query_id: u64::try_from(id).unwrap(),
                             termination_type: stop_mode.into(),
-                        }
-                    );
-                }
-                Rpc::UnregisterFragment(Request {
-                    payload: id,
-                    reply_to: tx,
-                }) => {
-                    dispatch!(
-                        client,
-                        tx,
-                        unregister_query,
-                        UnregisterQueryRequest {
-                            query_id: u64::try_from(id).unwrap()
                         }
                     );
                 }

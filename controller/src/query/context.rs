@@ -1,6 +1,5 @@
 use crate::worker::worker_client::{
-    RegisterFragmentRequest, Rpc, StartFragmentRequest, StopFragmentRequest,
-    UnregisterFragmentRequest, WorkerClientErr,
+    RegisterFragmentRequest, Rpc, StartFragmentRequest, StopFragmentRequest, WorkerClientErr,
 };
 use crate::worker::worker_registry::{WorkerError, WorkerRegistryHandle};
 use crate::query::retry::RetryPolicy;
@@ -22,7 +21,7 @@ pub(crate) struct QueryContext {
 }
 
 impl QueryContext {
-    pub(crate) async fn broadcast<F, Rsp>(
+    pub(crate) async fn multicast<F, Rsp>(
         &self,
         fragments: &[fragment::Model],
         mk_rpc: F,
@@ -48,7 +47,7 @@ impl QueryContext {
         &self,
         fragments: &[fragment::Model],
     ) -> Vec<Result<(), WorkerError>> {
-        self.broadcast(
+        self.multicast(
             fragments,
             |id| {
                 let (rx, req) = RegisterFragmentRequest::new(id);
@@ -66,7 +65,7 @@ impl QueryContext {
         &self,
         fragments: &[fragment::Model],
     ) -> Vec<Result<(), WorkerError>> {
-        self.broadcast(
+        self.multicast(
             fragments,
             |id| {
                 let (rx, req) = StartFragmentRequest::new(id);
@@ -88,26 +87,11 @@ impl QueryContext {
         stop_mode: StopMode,
         fragments: &[fragment::Model],
     ) -> Vec<Result<(), WorkerError>> {
-        self.broadcast(
+        self.multicast(
             fragments,
             |id| {
                 let (rx, req) = StopFragmentRequest::new((id, stop_mode));
                 (rx, Rpc::StopFragment(req))
-            },
-            &self.rollback_retry(),
-        )
-        .await
-    }
-
-    pub(crate) async fn unregister_fragments(
-        &self,
-        fragments: &[fragment::Model],
-    ) -> Vec<Result<(), WorkerError>> {
-        self.broadcast(
-            fragments,
-            |id| {
-                let (rx, req) = UnregisterFragmentRequest::new(id);
-                (rx, Rpc::UnregisterFragment(req))
             },
             &self.rollback_retry(),
         )
@@ -178,22 +162,6 @@ impl QueryContext {
         } else {
             for e in errors {
                 error!("Failed to stop fragment: {e}");
-            }
-        }
-    }
-
-    pub(crate) async fn rollback_unregister(&self, fragments: &[fragment::Model]) {
-        let errors: Vec<_> = self
-            .unregister_fragments(fragments)
-            .await
-            .into_iter()
-            .filter_map(Result::err)
-            .collect();
-        if errors.is_empty() {
-            debug!("All fragments unregistered");
-        } else {
-            for e in errors {
-                error!("Failed to unregister fragment: {e}");
             }
         }
     }

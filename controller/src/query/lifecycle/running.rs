@@ -42,7 +42,7 @@ impl Running {
         &self,
         ctx: &QueryContext,
     ) -> Vec<Result<QueryStatusReply, WorkerError>> {
-        ctx.broadcast(
+        ctx.multicast(
             &self.fragments,
             |id| {
                 let (rx, req) = GetFragmentStatusRequest::new(id);
@@ -168,6 +168,5 @@ impl Transition for Running {
 
     async fn rollback(self, ctx: &mut QueryContext, mode: StopMode) {
         ctx.rollback_stop(mode, &self.fragments).await;
-        ctx.rollback_unregister(&self.fragments).await;
     }
 }
