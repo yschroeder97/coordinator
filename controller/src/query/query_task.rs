@@ -110,13 +110,14 @@ async fn try_transition<T: Transition>(
     if buggify() {
         panic!("buggify: reconciler_try_transition_panic");
     }
+    let from_state = ctx.query.current_state;
     tokio::select! {
         result = state.transition(ctx) => {
             let _guard = span.enter();
             match result {
                 Ok(next) => {
                     let next = next.into();
-                    debug!(from = %ctx.query.current_state, to = %QueryState::from(&next), "transition succeeded");
+                    debug!(from = %from_state, to = %QueryState::from(&next), "transition succeeded");
                     next
                 }
                 Err(e) => {
@@ -124,7 +125,7 @@ async fn try_transition<T: Transition>(
                     state.rollback(ctx, StopMode::Forceful).await;
                     let _guard = span.enter();
                     let root = e.root_cause().to_string();
-                    warn!(from = %ctx.query.current_state, "transition failed: {root}");
+                    warn!(from = %from_state, "transition failed: {root}");
                     if ctx.query.error.is_none() {
                         ctx.persist_failed(root).await;
                     }
