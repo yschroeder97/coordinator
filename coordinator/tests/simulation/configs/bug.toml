@@ -1,0 +1,10 @@
+[[test]]
+title = "bug"
+timeout = 600
+convergence_timeout = 120
+
+  [[test.workload]]
+  test_name = "Cluster"
+  num_ops = 25
+  test_duration = 60.0
+  drop_weight = 3

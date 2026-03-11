@@ -9,18 +9,18 @@ timeout = 300
 
   [[test.workload]]
   test_name = "Cluster"
+  num_ops = 15
   test_duration = 30.0
-  max_sleep_secs = 3
 
   [[test.workload]]
   test_name = "Query"
+  num_ops = 15
   test_duration = 30.0
-  max_sleep_secs = 3
 
   [[test.workload]]
   test_name = "Attrition"
+  num_ops = 10
   test_duration = 30.0
   kill_rate = 0.15
-  kill_interval_secs = 5
   restart_delay_lo_secs = 2
   restart_delay_hi_secs = 8

@@ -2,11 +2,16 @@
 
 pub mod attrition;
 pub mod cluster;
+pub mod degradation;
+pub mod invariant;
 pub mod partition;
 pub mod query;
 
-use crate::harness::{TestHarness, arb};
+pub use invariant::{Invariant, InvariantContext, check_invariants};
+
+use crate::harness::arb;
 use async_trait::async_trait;
+use crate::harness::TestHarness;
 use madsim::rand::Rng;
 use model::query::fragment;
 use model::query::query_state::QueryState;
@@ -19,72 +24,37 @@ use std::pin::Pin;
 use std::time::Duration;
 use tracing::info;
 
-pub async fn run_timed_ops<'a, F>(duration: Duration, name: &str, mut step: F) -> usize
+const JITTER_FRACTION: u64 = 2;
+
+pub fn precompute_delays(num_ops: usize, duration: Duration) -> Vec<Duration> {
+    if num_ops == 0 {
+        return Vec::new();
+    }
+    let base_ms = duration.as_millis() as u64 / num_ops as u64;
+    let half = base_ms / JITTER_FRACTION;
+    let lo = base_ms.saturating_sub(half);
+    let hi = base_ms + half;
+    let mut rng = madsim::rand::thread_rng();
+    (0..num_ops)
+        .map(|_| Duration::from_millis(rng.gen_range(lo..=hi)))
+        .collect()
+}
+
+pub async fn run_ops<'a, F>(num_ops: usize, duration: Duration, name: &str, mut step: F)
 where
     F: FnMut(usize) -> Pin<Box<dyn std::future::Future<Output = ()> + 'a>>,
 {
-    let mut op_index = 0;
-    let _ = tokio::time::timeout(duration, async {
-        loop {
-            step(op_index).await;
-            op_index += 1;
-        }
-    })
-    .await;
-    info!("{name}: completed {op_index} ops");
-    op_index
+    let delays = precompute_delays(num_ops, duration);
+    for i in 0..num_ops {
+        step(i).await;
+        tokio::time::sleep(delays[i]).await;
+    }
+    info!("{name}: completed {num_ops} ops");
 }
 
 pub fn generate_weighted<Op: Clone + Debug>(strategies: Vec<(u32, BoxedStrategy<Op>)>) -> Op {
     let strategy = Union::new_weighted(strategies);
     arb(strategy)
-}
-
-pub fn sleep_strategy<Op: Debug + 'static>(max_secs: u64, wrap: fn(Duration) -> Op) -> (u32, BoxedStrategy<Op>) {
-    (1, (0..=max_secs).prop_map(move |s| wrap(Duration::from_secs(s))).boxed())
-}
-
-pub struct InvariantContext {
-    created_query_ids: Vec<i64>,
-    dropped_query_ids: Vec<i64>,
-}
-
-impl InvariantContext {
-    pub fn new(created_query_ids: Vec<i64>, dropped_query_ids: Vec<i64>) -> Self {
-        Self {
-            created_query_ids,
-            dropped_query_ids,
-        }
-    }
-
-    pub fn query_ids(&self) -> &[i64] {
-        &self.created_query_ids
-    }
-
-    pub fn dropped_query_ids(&self) -> &[i64] {
-        &self.dropped_query_ids
-    }
-
-    pub fn empty() -> Self {
-        Self::new(Vec::new(), Vec::new())
-    }
-}
-
-#[async_trait(?Send)]
-pub trait Invariant {
-    fn name(&self) -> &str;
-    async fn check(&self, harness: &TestHarness, ctx: &InvariantContext);
-}
-
-pub async fn check_invariants(
-    invariants: &[&dyn Invariant],
-    harness: &TestHarness,
-    ctx: &InvariantContext,
-) {
-    for inv in invariants {
-        inv.check(harness, ctx).await;
-        info!("invariant {}: ok", inv.name());
-    }
 }
 
 #[async_trait(?Send)]
@@ -115,8 +85,12 @@ pub fn parse_options<T: DeserializeOwned + Default>(
     }
     let table: toml::map::Map<String, toml::Value> = options
         .iter()
+        .filter(|(k, _)| k.as_str() != "test_name")
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    if table.is_empty() {
+        return T::default();
+    }
     toml::Value::Table(table)
         .try_into()
         .expect("failed to parse workload options")
@@ -165,43 +139,63 @@ pub fn inject_failure_workloads(workloads: &mut Vec<Box<dyn Workload>>) {
     }
 }
 
+fn fragment_state_rank(state: fragment::FragmentState) -> u8 {
+    match state {
+        fragment::FragmentState::Pending => 0,
+        fragment::FragmentState::Registered => 1,
+        fragment::FragmentState::Started => 2,
+        fragment::FragmentState::Running => 3,
+        fragment::FragmentState::Completed | fragment::FragmentState::Stopped => 4,
+        fragment::FragmentState::Failed => 5,
+    }
+}
+
+fn rank_to_query_state(rank: u8) -> QueryState {
+    match rank {
+        0 => QueryState::Pending,
+        1 => QueryState::Registered,
+        2 | 3 => QueryState::Running,
+        4 => QueryState::Completed,
+        _ => QueryState::Failed,
+    }
+}
+
 pub fn derive_query_state(
     fragments: &[fragment::Model],
     current_state: QueryState,
 ) -> QueryState {
+    if fragments.is_empty() {
+        return current_state;
+    }
+
     if fragments
         .iter()
         .any(|f| f.current_state == fragment::FragmentState::Failed)
     {
         return QueryState::Failed;
     }
+
     if fragments
         .iter()
         .all(|f| f.current_state == fragment::FragmentState::Completed)
     {
         return QueryState::Completed;
     }
+
     if fragments
         .iter()
         .all(|f| f.current_state == fragment::FragmentState::Stopped)
     {
         return QueryState::Stopped;
     }
-    if fragments.iter().all(|f| {
-        matches!(
-            f.current_state,
-            fragment::FragmentState::Running | fragment::FragmentState::Started
-        )
-    }) {
-        return QueryState::Running;
-    }
-    if fragments
+
+    let min_rank = fragments
         .iter()
-        .all(|f| f.current_state == fragment::FragmentState::Registered)
-    {
-        return QueryState::Registered;
-    }
-    current_state
+        .map(|f| fragment_state_rank(f.current_state))
+        .min()
+        .unwrap();
+
+    rank_to_query_state(min_rank)
 }
 
 

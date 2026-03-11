@@ -1,8 +1,6 @@
 #![cfg(madsim)]
 use crate::harness::TestHarness;
-use crate::workload::{
-    FailureInjectorFactory, Workload, WorkloadFactory, parse_options, run_timed_ops,
-};
+use crate::workload::{FailureInjectorFactory, Workload, WorkloadFactory, parse_options, run_ops};
 use async_trait::async_trait;
 use madsim::rand::{Rng, thread_rng};
 use madsim::runtime::Handle;
@@ -12,12 +10,15 @@ use std::ops::Range;
 use std::time::Duration;
 use tracing::info;
 
+const DEFAULT_NUM_OPS: usize = 10;
+const DEFAULT_TEST_DURATION: f64 = 30.0;
+
 #[derive(Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct AttritionConfig {
+    num_ops: usize,
     test_duration: f64,
     kill_rate: f64,
-    kill_interval_secs: u64,
     restart_delay_lo_secs: u64,
     restart_delay_hi_secs: u64,
     restart_all_after_secs: Option<u64>,
@@ -27,9 +28,9 @@ struct AttritionConfig {
 impl Default for AttritionConfig {
     fn default() -> Self {
         Self {
-            test_duration: 30.0,
+            num_ops: DEFAULT_NUM_OPS,
+            test_duration: DEFAULT_TEST_DURATION,
             kill_rate: 0.20,
-            kill_interval_secs: 5,
             restart_delay_lo_secs: 1,
             restart_delay_hi_secs: 10,
             restart_all_after_secs: None,
@@ -39,9 +40,9 @@ impl Default for AttritionConfig {
 }
 
 pub struct AttritionWorkload {
+    num_ops: usize,
     test_duration: Duration,
     kill_rate: f64,
-    kill_interval: Duration,
     restart_delay: Range<Duration>,
     restart_all_after_secs: Option<u64>,
     kill_coordinator: bool,
@@ -53,9 +54,9 @@ impl AttritionWorkload {
     pub fn from_options(options: &HashMap<String, toml::Value>) -> Self {
         let c: AttritionConfig = parse_options(options);
         Self {
+            num_ops: c.num_ops,
             test_duration: Duration::from_secs_f64(c.test_duration),
             kill_rate: c.kill_rate,
-            kill_interval: Duration::from_secs(c.kill_interval_secs),
             restart_delay: Duration::from_secs(c.restart_delay_lo_secs)
                 ..Duration::from_secs(c.restart_delay_hi_secs),
             restart_all_after_secs: c.restart_all_after_secs,
@@ -76,13 +77,13 @@ impl Workload for AttritionWorkload {
 
     async fn start(&self, harness: &TestHarness) {
         info!(
-            "{}: kill_rate={:.0}% interval={:?} restart_delay={:?}..{:?} duration={:?}",
+            "{}: {} ops over {:?} kill_rate={:.0}% restart_delay={:?}..{:?}",
             self.name(),
+            self.num_ops,
+            self.test_duration,
             self.kill_rate * 100.0,
-            self.kill_interval,
             self.restart_delay.start,
             self.restart_delay.end,
-            self.test_duration,
         );
 
         let mut node_names: Vec<String> = (0..harness.num_workers())
@@ -92,10 +93,8 @@ impl Workload for AttritionWorkload {
             node_names.push(harness.coordinator_name().to_string());
         }
 
-        run_timed_ops(self.test_duration, self.name(), |_| {
+        run_ops(self.num_ops, self.test_duration, self.name(), |_| {
             Box::pin(async {
-                tokio::time::sleep(self.kill_interval).await;
-
                 let mut rng = thread_rng();
                 let victims: Vec<&str> = node_names
                     .iter()

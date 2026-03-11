@@ -53,7 +53,6 @@ async fn run_test_inner(spec: TestSpec, convergence_timeout: Duration) {
 
     let network = spec.network.clone();
     let harness = TestHarness::start(&topology, network).await.unwrap();
-    harness.register_workers().await;
 
     if workloads.is_empty() {
         info!("no workloads configured, skipping");
@@ -73,19 +72,19 @@ async fn run_test_inner(spec: TestSpec, convergence_timeout: Duration) {
         w.setup(&harness).await;
     }
 
-    join_all(workloads.iter().map(|w| w.start(&harness)).collect::<Vec<_>>()).await;
+    join_all(workloads.iter().map(|w| w.start(&harness))).await;
 
     info!("workloads finished, resetting network");
     harness.reset_network();
 
     let all_query_ids: Vec<i64> = {
-        let queries: Vec<query::Model> = harness.send(GetQuery::all()).await.unwrap();
-        queries.iter().map(|q| q.id).collect()
+        let results: Vec<(query::Model, Vec<_>)> = harness.send(GetQuery::all()).await.unwrap();
+        results.iter().map(|(q, _)| q.id).collect()
     };
 
     info!("waiting for convergence ({} queries)", all_query_ids.len());
     let converged = harness
-        .wait_for_convergence(&all_query_ids, convergence_timeout)
+        .wait_convergence(&all_query_ids, convergence_timeout)
         .await;
     assert!(
         converged,

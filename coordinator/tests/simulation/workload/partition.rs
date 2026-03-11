@@ -1,8 +1,6 @@
 #![cfg(madsim)]
 use crate::harness::TestHarness;
-use crate::workload::{
-    FailureInjectorFactory, Workload, WorkloadFactory, parse_options, run_timed_ops,
-};
+use crate::workload::{FailureInjectorFactory, Workload, WorkloadFactory, parse_options, run_ops};
 use async_trait::async_trait;
 use madsim::net::NetSim;
 use madsim::rand::{Rng, thread_rng};
@@ -14,12 +12,15 @@ use std::ops::Range;
 use std::time::Duration;
 use tracing::info;
 
+const DEFAULT_NUM_OPS: usize = 10;
+const DEFAULT_TEST_DURATION: f64 = 30.0;
+
 #[derive(Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct PartitionConfig {
+    num_ops: usize,
     test_duration: f64,
     partition_rate: f64,
-    partition_interval_secs: u64,
     duration_lo_secs: u64,
     duration_hi_secs: u64,
 }
@@ -27,9 +28,9 @@ struct PartitionConfig {
 impl Default for PartitionConfig {
     fn default() -> Self {
         Self {
-            test_duration: 30.0,
+            num_ops: DEFAULT_NUM_OPS,
+            test_duration: DEFAULT_TEST_DURATION,
             partition_rate: 0.15,
-            partition_interval_secs: 3,
             duration_lo_secs: 1,
             duration_hi_secs: 10,
         }
@@ -37,9 +38,9 @@ impl Default for PartitionConfig {
 }
 
 pub struct PartitionWorkload {
+    num_ops: usize,
     test_duration: Duration,
     partition_rate: f64,
-    partition_interval: Duration,
     duration: Range<Duration>,
 }
 
@@ -49,9 +50,9 @@ impl PartitionWorkload {
     pub fn from_options(options: &HashMap<String, toml::Value>) -> Self {
         let c: PartitionConfig = parse_options(options);
         Self {
+            num_ops: c.num_ops,
             test_duration: Duration::from_secs_f64(c.test_duration),
             partition_rate: c.partition_rate,
-            partition_interval: Duration::from_secs(c.partition_interval_secs),
             duration: Duration::from_secs(c.duration_lo_secs)..Duration::from_secs(c.duration_hi_secs),
         }
     }
@@ -73,13 +74,13 @@ impl Workload for PartitionWorkload {
 
     async fn start(&self, harness: &TestHarness) {
         info!(
-            "{}: rate={:.0}% interval={:?} duration={:?}..{:?} test_duration={:?}",
+            "{}: {} ops over {:?} rate={:.0}% partition_duration={:?}..{:?}",
             self.name(),
+            self.num_ops,
+            self.test_duration,
             self.partition_rate * 100.0,
-            self.partition_interval,
             self.duration.start,
             self.duration.end,
-            self.test_duration,
         );
 
         let all_names: Vec<String> = once("coordinator".to_string())
@@ -94,10 +95,8 @@ impl Workload for PartitionWorkload {
         let net = NetSim::current();
         let rt = Handle::current();
 
-        run_timed_ops(self.test_duration, self.name(), |_| {
+        run_ops(self.num_ops, self.test_duration, self.name(), |_| {
             Box::pin(async {
-                tokio::time::sleep(self.partition_interval).await;
-
                 let mut rng = thread_rng();
                 if !rng.gen_bool(self.partition_rate) {
                     return;

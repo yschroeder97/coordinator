@@ -100,7 +100,14 @@ fn run_trial(spec: spec::TestSpec) {
 
     let rt = Runtime::with_seed_and_config(seed, madsim::Config::default());
 
-    rt.block_on(async {
-        runner::run_test(spec).await;
-    });
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rt.block_on(async {
+            runner::run_test(spec).await;
+        });
+    }));
+
+    if let Err(e) = result {
+        eprintln!("MADSIM_TEST_SEED={seed}");
+        std::panic::resume_unwind(e);
+    }
 }

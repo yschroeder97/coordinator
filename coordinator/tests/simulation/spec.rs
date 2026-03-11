@@ -23,14 +23,48 @@ pub struct TestSpec {
     pub workload: Option<Vec<WorkloadOptions>>,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(try_from = "RawNetworkConfig")]
 pub struct NetworkConfig {
     pub send_latency_lo_ms: Option<u64>,
     pub send_latency_hi_ms: Option<u64>,
     pub packet_loss_rate: Option<f64>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Deserialize)]
+struct RawNetworkConfig {
+    send_latency_lo_ms: Option<u64>,
+    send_latency_hi_ms: Option<u64>,
+    packet_loss_rate: Option<f64>,
+}
+
+impl TryFrom<RawNetworkConfig> for NetworkConfig {
+    type Error = String;
+
+    fn try_from(raw: RawNetworkConfig) -> Result<Self, Self::Error> {
+        if let (Some(lo), Some(hi)) = (raw.send_latency_lo_ms, raw.send_latency_hi_ms) {
+            if lo > hi {
+                return Err(format!(
+                    "send_latency_lo_ms ({lo}) must be <= send_latency_hi_ms ({hi})"
+                ));
+            }
+        }
+        if let Some(rate) = raw.packet_loss_rate {
+            if !(0.0..=1.0).contains(&rate) {
+                return Err(format!(
+                    "packet_loss_rate ({rate}) must be in [0.0, 1.0]"
+                ));
+            }
+        }
+        Ok(NetworkConfig {
+            send_latency_lo_ms: raw.send_latency_lo_ms,
+            send_latency_hi_ms: raw.send_latency_hi_ms,
+            packet_loss_rate: raw.packet_loss_rate,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct WorkloadOptions {
     pub test_name: String,
     #[serde(flatten)]
@@ -58,17 +92,4 @@ impl TestSpec {
     }
 }
 
-impl NetworkConfig {
-    pub fn validate(&self) {
-        if let (Some(lo), Some(hi)) = (self.send_latency_lo_ms, self.send_latency_hi_ms) {
-            assert!(lo <= hi, "send_latency_lo_ms ({lo}) must be <= send_latency_hi_ms ({hi})");
-        }
-        if let Some(rate) = self.packet_loss_rate {
-            assert!(
-                (0.0..=1.0).contains(&rate),
-                "packet_loss_rate ({rate}) must be in [0.0, 1.0]"
-            );
-        }
-    }
-}
 

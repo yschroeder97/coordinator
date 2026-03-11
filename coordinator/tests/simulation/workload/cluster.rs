@@ -2,47 +2,47 @@
 use crate::harness::TestHarness;
 use crate::workload::{
     Invariant, InvariantContext, Workload, WorkloadFactory, check_invariants, generate_weighted,
-    parse_options, sleep_strategy,
+    parse_options, precompute_delays,
 };
 use async_trait::async_trait;
 use model::worker;
 use model::worker::{DesiredWorkerState, DropWorker, GetWorker, WorkerState};
 use proptest::prelude::*;
 use serde::Deserialize;
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::Duration;
 use tracing::info;
 
+const DEFAULT_NUM_OPS: usize = 15;
+const DEFAULT_TEST_DURATION: f64 = 30.0;
+
 #[derive(Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct ClusterConfig {
+    num_ops: usize,
     test_duration: f64,
-    max_sleep_secs: u64,
     create_weight: u32,
     drop_weight: u32,
-    sleep_weight: u32,
 }
 
 impl Default for ClusterConfig {
     fn default() -> Self {
         Self {
-            test_duration: 30.0,
-            max_sleep_secs: 5,
+            num_ops: DEFAULT_NUM_OPS,
+            test_duration: DEFAULT_TEST_DURATION,
             create_weight: 3,
             drop_weight: 1,
-            sleep_weight: 1,
         }
     }
 }
 
 pub struct ClusterWorkload {
+    num_ops: usize,
     test_duration: Duration,
-    max_sleep_secs: u64,
     create_weight: u32,
     drop_weight: u32,
-    sleep_weight: u32,
-    state: Mutex<ClusterState>,
+    state: RefCell<ClusterState>,
 }
 
 #[derive(Default)]
@@ -54,7 +54,6 @@ struct ClusterState {
 enum ClusterOp {
     CreateWorker(usize),
     DropWorker(usize),
-    Sleep(Duration),
 }
 
 struct GeneratorState {
@@ -70,10 +69,8 @@ impl GeneratorState {
 
     fn valid_ops(
         &self,
-        max_sleep_secs: u64,
         create_weight: u32,
         drop_weight: u32,
-        sleep_weight: u32,
     ) -> Vec<(u32, BoxedStrategy<ClusterOp>)> {
         let mut strategies: Vec<(u32, BoxedStrategy<ClusterOp>)> = Vec::new();
 
@@ -109,16 +106,13 @@ impl GeneratorState {
             ));
         }
 
-        let (_, s) = sleep_strategy(max_sleep_secs, ClusterOp::Sleep);
-        strategies.push((sleep_weight, s));
-
         strategies
     }
 
     fn apply(&mut self, op: &ClusterOp) {
         match op {
             ClusterOp::CreateWorker(i) => self.registered[*i] = true,
-            ClusterOp::DropWorker(_) | ClusterOp::Sleep(_) => {}
+            ClusterOp::DropWorker(_) => {}
         }
     }
 }
@@ -129,22 +123,16 @@ impl ClusterWorkload {
     pub fn from_options(options: &HashMap<String, toml::Value>) -> Self {
         let c: ClusterConfig = parse_options(options);
         Self {
+            num_ops: c.num_ops,
             test_duration: Duration::from_secs_f64(c.test_duration),
-            max_sleep_secs: c.max_sleep_secs,
             create_weight: c.create_weight,
             drop_weight: c.drop_weight,
-            sleep_weight: c.sleep_weight,
-            state: Mutex::new(ClusterState::default()),
+            state: RefCell::new(ClusterState::default()),
         }
     }
 
     fn generate_op(&self, gen_state: &mut GeneratorState) -> ClusterOp {
-        let strategies = gen_state.valid_ops(
-            self.max_sleep_secs,
-            self.create_weight,
-            self.drop_weight,
-            self.sleep_weight,
-        );
+        let strategies = gen_state.valid_ops(self.create_weight, self.drop_weight);
         let op = generate_weighted(strategies);
         gen_state.apply(&op);
         op
@@ -192,10 +180,6 @@ impl ClusterWorkload {
                     Err(e) => info!("cluster[{i}]: DropWorker({idx}) rejected: {e}"),
                 }
             }
-            ClusterOp::Sleep(d) => {
-                info!("cluster[{i}]: Sleep({d:?})");
-                tokio::time::sleep(d).await;
-            }
         }
     }
 
@@ -209,27 +193,22 @@ impl Workload for ClusterWorkload {
 
     async fn start(&self, harness: &TestHarness) {
         info!(
-            "{}: running for {:?} (sleep_max={}s)",
-            self.name(),
-            self.test_duration,
-            self.max_sleep_secs
+            "{}: running {} ops over {:?}",
+            self.name(), self.num_ops, self.test_duration,
         );
 
+        let delays = precompute_delays(self.num_ops, self.test_duration);
         let mut gen_state = GeneratorState::new(harness.num_workers());
         let mut result = ClusterState::default();
-        let mut op_index = 0;
 
-        let _ = tokio::time::timeout(self.test_duration, async {
-            loop {
-                let op = self.generate_op(&mut gen_state);
-                self.execute_op(harness, op_index, op, &mut result).await;
-                op_index += 1;
-            }
-        })
-        .await;
-        info!("{}: completed {op_index} ops", self.name());
+        for i in 0..self.num_ops {
+            let op = self.generate_op(&mut gen_state);
+            self.execute_op(harness, i, op, &mut result).await;
+            tokio::time::sleep(delays[i]).await;
+        }
+        info!("{}: completed {} ops", self.name(), self.num_ops);
 
-        *self.state.lock().unwrap() = result;
+        *self.state.borrow_mut() = result;
     }
 
     async fn check(&self, harness: &TestHarness) {
@@ -249,13 +228,26 @@ impl Invariant for WorkerConvergence {
     async fn check(&self, harness: &TestHarness, _ctx: &InvariantContext) {
         let workers: Vec<worker::Model> = harness.send(GetWorker::all()).await.unwrap();
         for w in &workers {
-            assert!(
-                w.desired_state != DesiredWorkerState::Active
-                    || w.current_state == WorkerState::Active,
-                "worker_convergence: worker {} desired=Active current={:?}",
-                w.host_addr,
-                w.current_state
-            );
+            match w.desired_state {
+                DesiredWorkerState::Active => {
+                    assert_eq!(
+                        w.current_state,
+                        WorkerState::Active,
+                        "worker_convergence: worker {} desired=Active current={:?}",
+                        w.host_addr,
+                        w.current_state
+                    );
+                }
+                DesiredWorkerState::Removed => {
+                    assert!(
+                        w.current_state == WorkerState::Removed
+                            || w.current_state == WorkerState::Unreachable,
+                        "worker_convergence: worker {} desired=Removed current={:?}",
+                        w.host_addr,
+                        w.current_state
+                    );
+                }
+            }
         }
     }
 }

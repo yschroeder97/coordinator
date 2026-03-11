@@ -4,11 +4,12 @@ timeout = 300
 
   [[test.workload]]
   test_name = "Query"
+  num_ops = 15
   test_duration = 30.0
-  max_sleep_secs = 3
 
   [[test.workload]]
   test_name = "Attrition"
-  test_duration = 30.0
+  num_ops = 1
+  test_duration = 5.0
   kill_rate = 0.0
   restart_all_after_secs = 5
