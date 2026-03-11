@@ -1,20 +1,24 @@
 #![cfg(madsim)]
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::time::Duration;
 
-const ENV_CONFIG_PATH: &str = "SIM_TEST_CONFIG";
 const DEFAULT_TIMEOUT_SECS: u64 = 600;
-const DEFAULT_MIN_WORKERS: u8 = 2;
+const DEFAULT_BUGGIFY_PROBABILITY: f64 = 0.25;
 
-#[derive(Default, Debug, Deserialize)]
+#[derive(Debug, Deserialize)]
+pub struct TestFile {
+    pub test: Vec<TestSpec>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TestSpec {
     pub title: Option<String>,
-    pub timeout_secs: Option<u64>,
-    pub min_workers: Option<u8>,
+    pub timeout: Option<u64>,
     pub buggify: Option<bool>,
+    pub run_failure_workloads: Option<bool>,
     pub network: Option<NetworkConfig>,
-    pub workload: Option<Vec<WorkloadEntry>>,
+    pub workload: Option<Vec<WorkloadOptions>>,
 }
 
 #[derive(Default, Clone, Debug, Deserialize)]
@@ -25,57 +29,37 @@ pub struct NetworkConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "name")]
-pub enum WorkloadEntry {
-    CrudWorkload {
-        min_ops: Option<usize>,
-        max_ops: Option<usize>,
-        max_sleep_secs: Option<u64>,
-    },
-    Attrition {
-        kill_rate: Option<f64>,
-        kill_interval_secs: Option<u64>,
-        restart_delay_lo_secs: Option<u64>,
-        restart_delay_hi_secs: Option<u64>,
-        restart_all_after_secs: Option<u64>,
-    },
-    NetworkPartition {
-        partition_rate: Option<f64>,
-        duration_lo_secs: Option<u64>,
-        duration_hi_secs: Option<u64>,
-    },
+pub struct WorkloadOptions {
+    pub test_name: String,
+    #[serde(flatten)]
+    pub options: HashMap<String, toml::Value>,
 }
 
 impl TestSpec {
     pub fn timeout(&self) -> Duration {
-        Duration::from_secs(self.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS))
+        Duration::from_secs(self.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS))
     }
 
-    pub fn min_workers(&self) -> u8 {
-        self.min_workers.unwrap_or(DEFAULT_MIN_WORKERS)
+    pub fn run_failure_workloads(&self) -> bool {
+        self.run_failure_workloads.unwrap_or(true)
+    }
+
+    pub fn buggify_probability() -> f64 {
+        DEFAULT_BUGGIFY_PROBABILITY
     }
 }
 
-pub fn load_spec(path: Option<&str>) -> TestSpec {
-    let file_path = match path {
-        Some(p) => Some(p.to_string()),
-        None => std::env::var(ENV_CONFIG_PATH).ok(),
-    };
-
-    let file_path = match file_path {
-        Some(p) if !p.is_empty() => p,
-        _ => return TestSpec::default(),
-    };
-
-    let full_path = if PathBuf::from(&file_path).is_relative() {
-        let base = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
-        PathBuf::from(base).join(&file_path)
-    } else {
-        PathBuf::from(&file_path)
-    };
-
-    let content = std::fs::read_to_string(&full_path)
-        .unwrap_or_else(|e| panic!("Failed to read spec at {}: {e}", full_path.display()));
-    toml::from_str(&content)
-        .unwrap_or_else(|e| panic!("Failed to parse spec at {}: {e}", full_path.display()))
+impl NetworkConfig {
+    pub fn validate(&self) {
+        if let (Some(lo), Some(hi)) = (self.send_latency_lo_ms, self.send_latency_hi_ms) {
+            assert!(lo <= hi, "send_latency_lo_ms ({lo}) must be <= send_latency_hi_ms ({hi})");
+        }
+        if let Some(rate) = self.packet_loss_rate {
+            assert!(
+                (0.0..=1.0).contains(&rate),
+                "packet_loss_rate ({rate}) must be in [0.0, 1.0]"
+            );
+        }
+    }
 }
+

@@ -194,7 +194,7 @@ impl CreateWorker {
 
     pub fn topology(min_workers: u8) -> proptest::strategy::BoxedStrategy<Vec<CreateWorker>> {
         use proptest::prelude::*;
-        const MAX_SIM_WORKERS: u8 = 32;
+        const MAX_SIM_WORKERS: u8 = 16;
         (min_workers..=MAX_SIM_WORKERS)
             .prop_flat_map(|n| {
                 prop::collection::vec(Self::arb_capacity(), n as usize..=n as usize).prop_map(

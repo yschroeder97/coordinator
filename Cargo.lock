@@ -529,12 +529,15 @@ name = "coordinator"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "catalog",
  "common",
  "controller",
  "flume 0.12.0",
  "futures",
  "futures-util",
+ "inventory",
+ "libtest-mimic",
  "madsim",
  "madsim-tokio",
  "madsim-tonic",
@@ -546,6 +549,7 @@ dependencies = [
  "serde_json",
  "strum",
  "thiserror 2.0.18",
+ "tokio-retry",
  "tokio-util",
  "toml 0.8.23",
  "tracing",
@@ -766,6 +770,12 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "escape8259"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5692dd7b5a1978a5aeb0ce83b7655c58ca8efdcb79d21036ea249da95afec2c6"
 
 [[package]]
 name = "etcetera"
@@ -1417,6 +1427,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory"
+version = "0.3.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009ae045c87e7082cb72dab0ccd01ae075dd00141ddc108f43a0ea150a9e7227"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1503,6 +1522,18 @@ dependencies = [
  "cc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "libtest-mimic"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5297962ef19edda4ce33aaa484386e0a5b3d7f2f4e037cbeee00503ef6b29d33"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "clap",
+ "escape8259",
 ]
 
 [[package]]

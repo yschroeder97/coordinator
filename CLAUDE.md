@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NES Coordinator is a Rust-based stateful coordinator for the NebulaStream distributed stream processing system. It serves as the control plane, managing metadata (workers, queries, sources, sinks) via SQLite and orchestrating query execution across worker nodes via gRPC.
 
+## Rules
+
+- **Test timeout:** Never run any test invocation command (cargo test, cargo nextest, etc.) without a timeout of less than 1 minute.
+
 ## Build and Test Commands
 
 ```bash

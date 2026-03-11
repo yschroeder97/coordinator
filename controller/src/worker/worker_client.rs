@@ -8,7 +8,7 @@ use thiserror::Error;
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tonic::transport::{Channel, Endpoint};
-use tracing::{Instrument, debug, info, instrument, warn};
+use tracing::{Instrument, debug, instrument, warn};
 
 pub mod worker_rpc_service {
     tonic::include_proto!("worker_rpc");
@@ -94,12 +94,12 @@ impl WorkerClient {
 
         let channel = Retry::spawn(connect_retry_strategy(), || async {
             endpoint.connect().await.map_err(|e| {
-                info!("Retrying connection establishment");
+                debug!("Retrying connection");
                 WorkerClientErr::Connection(e, grpc_addr.clone())
             })
         })
         .await?;
-        info!("Established connection");
+        debug!("Connected");
 
         let (rpc_sender, rpc_listener) = flume::bounded(64);
         Ok((
@@ -112,7 +112,7 @@ impl WorkerClient {
         ))
     }
 
-    #[instrument(fields(grpc_addr = %self.grpc_addr))]
+    #[instrument(skip(self), fields(grpc_addr = %self.grpc_addr))]
     pub(crate) async fn run(self) {
         macro_rules! dispatch {
             ($client:expr, $tx:expr, $method:ident, $req:expr) => {
@@ -207,7 +207,7 @@ impl WorkerClient {
                 }
             }
         }
-        info!("RPC channel closed, shutting down");
+        debug!("RPC channel closed");
     }
 }
 
@@ -228,6 +228,6 @@ where
 {
     let res = res.map_err(|e| e.into());
     if tx.send(res).is_err() {
-        warn!("Requesting task dropped the receiver channel");
+        debug!("Requesting task dropped the receiver channel");
     }
 }

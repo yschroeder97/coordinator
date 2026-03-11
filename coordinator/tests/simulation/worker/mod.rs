@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tonic::metadata::MetadataMap;
 use tonic::{Code, Request, Response, Status};
+use madsim::rand::Rng;
 use tracing::{debug, error, instrument};
 
 use controller::worker::health_monitor::health_proto;
@@ -70,14 +69,12 @@ struct QueryFragment {
 }
 
 pub struct SingleNodeWorker {
-    fail_rpcs: Arc<AtomicBool>,
     fragments: Arc<RwLock<HashMap<FragmentId, QueryFragment>>>,
 }
 
 impl SingleNodeWorker {
-    pub fn new(fail_rpcs: Arc<AtomicBool>) -> Self {
+    pub fn new() -> Self {
         Self {
-            fail_rpcs,
             fragments: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -114,21 +111,20 @@ impl SingleNodeWorker {
         }
     }
 
-    fn inject_fault(&self) -> Result<(), Status> {
-        if self.fail_rpcs.load(Ordering::Relaxed) {
-            let mut metadata = MetadataMap::new();
-            metadata.insert("code", "0".parse().unwrap());
-            metadata.insert("what", "internal error".parse().unwrap());
-            metadata.insert("trace", "empty".parse().unwrap());
-            error!("RPC failed with injected internal error");
-
-            return Err(Status::with_metadata(
-                Code::Internal,
-                "injected internal error",
-                metadata,
-            ));
+    fn maybe_fail() -> Result<(), Status> {
+        if madsim::buggify::buggify() {
+            error!("buggify: simulated RPC failure");
+            return Err(Status::new(Code::Internal, "buggify: simulated RPC failure"));
         }
         Ok(())
+    }
+
+    async fn maybe_delay() {
+        if madsim::buggify::buggify_with_prob(0.1) {
+            let delay = Duration::from_millis(madsim::rand::thread_rng().gen_range(100..2000));
+            debug!("buggify: injecting {delay:?} RPC delay");
+            tokio::time::sleep(delay).await;
+        }
     }
 }
 
@@ -139,7 +135,8 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<RegisterQueryRequest>,
     ) -> Result<Response<RegisterQueryReply>, Status> {
-        self.inject_fault()?;
+        Self::maybe_fail()?;
+        Self::maybe_delay().await;
 
         let id = request.get_ref().query_id;
         self.fragments
@@ -156,7 +153,8 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<UnregisterQueryRequest>,
     ) -> Result<Response<()>, Status> {
-        self.inject_fault()?;
+        Self::maybe_fail()?;
+        Self::maybe_delay().await;
         let query_id = request.get_ref().query_id;
         match self.fragments.write().unwrap().remove(&query_id) {
             Some(_) => {
@@ -172,10 +170,17 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<StartQueryRequest>,
     ) -> Result<Response<()>, Status> {
-        self.inject_fault()?;
+        Self::maybe_fail()?;
+        Self::maybe_delay().await;
         let query_id = request.get_ref().query_id;
         self.with_query_mut(query_id, |query| {
-            query.state = QueryFragmentState::Running;
+            if madsim::buggify::buggify_with_prob(0.05) {
+                error!("buggify: query {query_id} failed on start");
+                query.state = QueryFragmentState::Failed;
+                query.terminated = Self::current_timestamp_ms();
+            } else {
+                query.state = QueryFragmentState::Running;
+            }
             query.started = Self::current_timestamp_ms();
             debug!("Started query");
         })?;
@@ -184,7 +189,8 @@ impl WorkerRpcService for SingleNodeWorker {
 
     #[instrument(skip(self), fields(query_id = %request.get_ref().query_id))]
     async fn stop_query(&self, request: Request<StopQueryRequest>) -> Result<Response<()>, Status> {
-        self.inject_fault()?;
+        Self::maybe_fail()?;
+        Self::maybe_delay().await;
         let query_id = request.get_ref().query_id;
         self.with_query_mut(query_id, |query| {
             query.state = QueryFragmentState::Stopped;
@@ -199,7 +205,8 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<QueryStatusRequest>,
     ) -> Result<Response<QueryStatusReply>, Status> {
-        self.inject_fault()?;
+        Self::maybe_fail()?;
+        Self::maybe_delay().await;
         let query_id = request.get_ref().query_id;
         let reply = self.with_query(query_id, |query| QueryStatusReply {
             query_id,
@@ -214,7 +221,8 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<QueryLogRequest>,
     ) -> Result<Response<QueryLogReply>, Status> {
-        self.inject_fault()?;
+        Self::maybe_fail()?;
+        Self::maybe_delay().await;
         let _ = request;
         Ok(Response::new(QueryLogReply { entries: vec![] }))
     }
@@ -224,7 +232,8 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<WorkerStatusRequest>,
     ) -> Result<Response<WorkerStatusResponse>, Status> {
-        self.inject_fault()?;
+        Self::maybe_fail()?;
+        Self::maybe_delay().await;
         let queries = self.fragments.read().unwrap();
         let (terminated, active): (Vec<_>, Vec<_>) = queries.iter().partition(|(_, query)| {
             query.state == QueryFragmentState::Failed || query.state == QueryFragmentState::Stopped

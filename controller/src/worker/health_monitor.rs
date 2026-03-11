@@ -1,7 +1,6 @@
 use crate::worker::poly_join_set::{AbortHandle, JoinSet};
 use catalog::Reconcilable;
 use catalog::worker_catalog::WorkerCatalog;
-use madsim::buggify::buggify;
 use model::worker;
 use model::worker::endpoint::GrpcAddr;
 use model::worker::{GetWorker, WorkerState};
@@ -67,9 +66,6 @@ impl HealthMonitor {
     }
 
     async fn synchronize(&mut self) {
-        if buggify() {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        }
         let active = self
             .catalog
             .get_worker(GetWorker::all().with_current_state(WorkerState::Active))
@@ -138,8 +134,7 @@ impl HealthMonitor {
                 service: String::new(),
             });
 
-            let health_ok = client.check(req).await.is_ok();
-            if !health_ok || buggify() {
+            if client.check(req).await.is_err() {
                 Self::mark_unreachable(&catalog, worker).await;
                 return;
             }

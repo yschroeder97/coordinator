@@ -91,7 +91,6 @@ impl QueryController {
     fn spawn_reconciliation_task(&mut self, mismatch: query::Model) {
         let (stop_tx, stop_rx) = flume::bounded(1);
         let query_id = mismatch.id;
-        info!(query_id, name = %mismatch.name, "Spawning reconciliation task");
 
         let ctx = QueryContext {
             query: mismatch,

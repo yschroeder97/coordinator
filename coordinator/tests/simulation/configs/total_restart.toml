@@ -1,12 +1,14 @@
-timeout_secs = 300
-min_workers = 3
+[[test]]
+title = "total_restart"
+timeout = 300
 
-[[workload]]
-name = "CrudWorkload"
-min_ops = 5
-max_ops = 15
+  [[test.workload]]
+  test_name = "Query"
+  test_duration = 30.0
+  max_sleep_secs = 3
 
-[[workload]]
-name = "Attrition"
-kill_rate = 0.0
-restart_all_after_secs = 5
+  [[test.workload]]
+  test_name = "Attrition"
+  test_duration = 30.0
+  kill_rate = 0.0
+  restart_all_after_secs = 5

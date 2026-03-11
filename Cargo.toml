@@ -40,6 +40,8 @@ tonic = { version = "0.5.1", package = "madsim-tonic" }
 prost = "=0.13.4"
 flume = "0.12"
 itertools = "0.14"
+async-trait = "0.1"
+inventory = "0.3"
 tonic-build = { version = "0.5", package = "madsim-tonic-build" }
 
 catalog = { path = "catalog" }

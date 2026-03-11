@@ -22,6 +22,14 @@ pub enum StateBackend {
     },
 }
 
+impl StateBackend {
+    pub fn sqlite(path: &str) -> Self {
+        let endpoint = format!("sqlite:{path}?mode=rwc");
+        let opts = ConnectOptions::new(&endpoint);
+        Self::Sqlite { endpoint, opts }
+    }
+}
+
 #[derive(Clone)]
 pub struct Database {
     pub(crate) conn: DatabaseConnection,
@@ -35,16 +43,33 @@ impl Database {
             StateBackend::Memory => {
                 const IN_MEMORY_DB: &str = "sqlite::memory:";
 
-                let conn = sea_orm::Database::connect(
-                    ConnectOptions::new(IN_MEMORY_DB)
-                        .min_connections(1)
-                        .max_connections(1)
-                        .acquire_timeout(MAX_DURATION)
-                        .connect_timeout(MAX_DURATION)
-                        .sqlx_logging(false)
-                        .to_owned(),
-                )
-                .await?;
+                let mut opts = ConnectOptions::new(IN_MEMORY_DB);
+                opts.min_connections(1)
+                    .max_connections(1)
+                    .acquire_timeout(MAX_DURATION)
+                    .connect_timeout(MAX_DURATION)
+                    .idle_timeout(MAX_DURATION)
+                    .max_lifetime(MAX_DURATION)
+                    // When enabled (the default), sqlx pings the connection on every acquire.
+                    // If a tokio::select! cancels the caller mid-ping, the connection is dropped,
+                    // which destroys the in-memory database. Disabling the ping makes acquire
+                    // cancellation-safe. See: https://docs.rs/sqlx/latest/sqlx/struct.Pool.html
+                    .test_before_acquire(false)
+                    .sqlx_logging(false);
+                let conn = sea_orm::Database::connect(opts).await?;
+                Ok(Self { conn })
+            }
+            StateBackend::Sqlite { endpoint, opts } => {
+                let mut opts = opts;
+                opts.min_connections(1)
+                    .max_connections(1)
+                    .acquire_timeout(MAX_DURATION)
+                    .connect_timeout(MAX_DURATION)
+                    .idle_timeout(MAX_DURATION)
+                    .max_lifetime(MAX_DURATION)
+                    .test_before_acquire(false)
+                    .sqlx_logging(false);
+                let conn = sea_orm::Database::connect(opts).await?;
                 Ok(Self { conn })
             }
             _ => bail!("Storage backend currently not supported"),

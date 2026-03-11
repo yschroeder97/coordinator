@@ -36,3 +36,12 @@ futures = "0.3"
 toml = "0.8"
 serde = { workspace = true }
 tokio-util = "0.7"
+async-trait.workspace = true
+inventory.workspace = true
+libtest-mimic = "0.8"
+tokio-retry.workspace = true
+
+[[test]]
+name = "simulation"
+path = "tests/simulation/main.rs"
+harness = false

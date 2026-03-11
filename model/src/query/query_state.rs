@@ -71,6 +71,20 @@ impl From<String> for QueryState {
     }
 }
 
+impl From<super::fragment::FragmentState> for QueryState {
+    fn from(state: super::fragment::FragmentState) -> Self {
+        use super::fragment::FragmentState;
+        match state {
+            FragmentState::Pending => Self::Pending,
+            FragmentState::Registered => Self::Registered,
+            FragmentState::Started | FragmentState::Running => Self::Running,
+            FragmentState::Completed => Self::Completed,
+            FragmentState::Stopped => Self::Stopped,
+            FragmentState::Failed => Self::Failed,
+        }
+    }
+}
+
 impl QueryState {
     pub fn is_terminal(&self) -> bool {
         matches!(

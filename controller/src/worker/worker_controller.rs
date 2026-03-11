@@ -5,7 +5,6 @@ use crate::worker::worker_registry::WorkerRegistry;
 use catalog::Reconcilable;
 use catalog::worker_catalog::WorkerCatalog;
 use model::worker::endpoint::GrpcAddr;
-use madsim::buggify::buggify;
 use model::worker::{self, DesiredWorkerState, WorkerState};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -43,9 +42,7 @@ impl WorkerStateInternal {
                 debug!("Aborted pending connection for worker {}", addr);
             }
             Active { .. } => {
-                if !buggify() {
-                    registry.unregister(addr);
-                }
+                registry.unregister(addr);
                 info!("Removed active worker {}", addr);
             }
         }
@@ -117,9 +114,6 @@ impl WorkerController {
     }
 
     async fn reconcile(&mut self) {
-        if buggify() {
-            return;
-        }
         let mismatched_workers = match self.worker_catalog.get_mismatch().await {
             Ok(workers) => workers,
             Err(e) => {
@@ -177,19 +171,13 @@ impl WorkerController {
             }
         };
 
-        if buggify() {
-            panic!("buggify: worker_pre_activate");
-        }
-
         let updated = self
             .worker_catalog
             .set_worker_state(model.into(), WorkerState::Active)
             .await
             .unwrap();
         self.registry.register(addr.clone(), rpc_sender);
-        if buggify() {
-            tokio::time::sleep(Duration::from_secs(3)).await;
-        }
+        info!(%addr, "Worker active");
         let task_addr = addr.clone();
         let handle = self.active.spawn(async move {
             client.run().await;
@@ -214,9 +202,6 @@ impl WorkerController {
     }
 
     async fn on_connect_err(&mut self, err: WorkerClientErr) {
-        if buggify() {
-            panic!("buggify: worker_connect_err_panic");
-        }
         error!("Failed to connect to worker: {:?}", err);
         let addr = err.addr().clone();
         let model = match self.workers.remove(&addr) {

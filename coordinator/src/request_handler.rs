@@ -178,7 +178,7 @@ impl RequestHandler {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn handle_recv(&mut self, req: CoordinatorRequest) {
         match req {
             CoordinatorRequest::CreateLogicalSource(r) => {

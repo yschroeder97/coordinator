@@ -110,7 +110,7 @@ into_request!(GetQuery, GetQueryRequest, CoordinatorRequest);
 into_request!(GetWorker, GetWorkerRequest, CoordinatorRequest);
 into_request!(GetFragment, GetFragmentRequest, CoordinatorRequest);
 
-const DEFAULT_CAPACITY: usize = 16;
+const DEFAULT_CAPACITY: usize = 1024;
 
 #[derive(Debug, Clone, Copy, Display)]
 enum Service {
@@ -154,22 +154,22 @@ impl Supervisor {
             Service::WorkerController => Box::pin(
                 WorkerController::new(self.catalog.worker.clone(), self.registry.clone())
                     .run()
-                    .instrument(info_span!("WorkerController")),
+                    .instrument(info_span!("worker_controller")),
             ),
             Service::HealthMonitor => Box::pin(
                 HealthMonitor::new(self.catalog.worker.clone())
                     .run()
-                    .instrument(info_span!("HealthMonitor")),
+                    .instrument(info_span!("health_monitor")),
             ),
             Service::QueryController => Box::pin(
                 QueryController::new(self.catalog.clone(), self.registry.handle())
                     .run()
-                    .instrument(info_span!("QueryController")),
+                    .instrument(info_span!("query_controller")),
             ),
             Service::RequestHandler => Box::pin(
                 RequestHandler::new(self.receiver.clone(), self.catalog.clone())
                     .run()
-                    .instrument(info_span!("RequestHandler")),
+                    .instrument(info_span!("request_handler")),
             ),
         };
         self.services
@@ -237,6 +237,23 @@ pub async fn start_for_test() -> flume::Sender<CoordinatorRequest> {
     let (handle, receiver) = flume::bounded(DEFAULT_CAPACITY);
 
     let catalog = Catalog::for_test().await;
+    let registry = WorkerRegistry::default();
+
+    tokio::spawn(Supervisor::new(catalog, registry, receiver).run());
+
+    handle
+}
+
+#[cfg(madsim)]
+pub async fn start_for_sim(db_path: &str) -> flume::Sender<CoordinatorRequest> {
+    info!("Starting (sim, db={db_path})");
+    let (handle, receiver) = flume::bounded(DEFAULT_CAPACITY);
+
+    let db = Database::with(StateBackend::sqlite(db_path))
+        .await
+        .expect("failed to create database");
+    db.migrate().await.expect("migration failed");
+    let catalog = Catalog::from(db);
     let registry = WorkerRegistry::default();
 
     tokio::spawn(Supervisor::new(catalog, registry, receiver).run());

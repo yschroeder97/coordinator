@@ -10,7 +10,7 @@ use model::query;
 use model::query::StopMode;
 use model::query::query_state::QueryState;
 use std::time::Duration;
-use tracing::{info, info_span, warn};
+use tracing::{debug, info, info_span, warn};
 
 pub(crate) enum QueryStateInternal {
     Pending(Pending),
@@ -116,16 +116,17 @@ async fn try_transition<T: Transition>(
             match result {
                 Ok(next) => {
                     let next = next.into();
-                    info!(from = %ctx.query.current_state, to = %QueryState::from(&next), "Transition succeeded");
+                    debug!(from = %ctx.query.current_state, to = %QueryState::from(&next), "transition succeeded");
                     next
                 }
                 Err(e) => {
                     drop(_guard);
                     state.rollback(ctx, StopMode::Forceful).await;
                     let _guard = span.enter();
-                    warn!("Transition failed: {e:#}");
+                    let root = e.root_cause().to_string();
+                    warn!(from = %ctx.query.current_state, "transition failed: {root}");
                     if ctx.query.error.is_none() {
-                        ctx.persist_failed(format!("{e:#}")).await;
+                        ctx.persist_failed(root).await;
                     }
                     QueryStateInternal::Failed
                 }
@@ -153,7 +154,6 @@ impl QueryReconciler {
             "query",
             id = ctx.query.id,
             name = %ctx.query.name,
-            statement = %ctx.query.statement,
         );
         {
             let _guard = span.enter();

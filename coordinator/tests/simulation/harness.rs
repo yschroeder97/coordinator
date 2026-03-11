@@ -3,61 +3,51 @@ use crate::spec::NetworkConfig;
 use crate::worker::{HealthServer, HealthServiceImpl, SingleNodeWorker, WorkerRpcServiceServer};
 use anyhow::Result;
 use common::request::Request;
-use coordinator::coordinator::{CoordinatorRequest, start_for_test};
+use coordinator::coordinator::{CoordinatorRequest, start_for_sim};
 use futures::future::join_all;
 use madsim::rand::{Rng, thread_rng};
+use madsim::net::NetSim;
 use madsim::runtime::{Handle, NodeHandle};
-use model::Generate;
+use model::{query, worker};
 use model::query::GetQuery;
 use model::query::query_state::QueryState;
 use model::worker::endpoint::NetworkAddr;
-use model::worker::{CreateWorker, GetWorker, WorkerState};
+use model::worker::{CreateWorker, DesiredWorkerState, GetWorker, WorkerState};
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
 use std::fmt::Debug;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_retry::Retry;
+use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{debug, info};
 
+const COORDINATOR_NAME: &str = "coordinator";
 const COORDINATOR_IP: &str = "192.168.1.1";
 const DEFAULT_SEND_LATENCY_LO: Duration = Duration::from_millis(1);
-const DEFAULT_SEND_LATENCY_HI: Duration = Duration::from_millis(10);
+const DEFAULT_SEND_LATENCY_HI: Duration = Duration::from_millis(100);
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn madsim_test_runner() -> TestRunner {
-    let seed: [u8; 32] = thread_rng().r#gen();
-    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
-    TestRunner::new_with_rng(Default::default(), rng)
+thread_local! {
+    static RUNNER: std::cell::RefCell<TestRunner> = std::cell::RefCell::new({
+        let seed: [u8; 32] = thread_rng().r#gen();
+        let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
+        TestRunner::new_with_rng(Default::default(), rng)
+    });
 }
 
 pub fn arb<S: Strategy>(strategy: S) -> S::Value {
-    strategy
-        .new_tree(&mut madsim_test_runner())
-        .unwrap()
-        .current()
-}
-
-pub fn arb_query() -> model::query::CreateQuery {
-    model::query::CreateQuery::generate()
-        .new_tree(&mut madsim_test_runner())
-        .unwrap()
-        .current()
-        .block_until(QueryState::Pending)
-}
-
-pub fn arb_topology_min(min: u8) -> Vec<CreateWorker> {
-    CreateWorker::topology(min)
-        .new_tree(&mut madsim_test_runner())
-        .unwrap()
-        .current()
+    RUNNER.with(|r| strategy.new_tree(&mut r.borrow_mut()).unwrap().current())
 }
 
 pub struct TestHarness {
     workers: Vec<CreateWorker>,
-    coordinator: (flume::Sender<CoordinatorRequest>, NodeHandle),
+    coordinator_sender: Arc<std::sync::Mutex<flume::Sender<CoordinatorRequest>>>,
+    coordinator_node: NodeHandle,
+    db_path: String,
 }
 
 impl TestHarness {
@@ -67,11 +57,17 @@ impl TestHarness {
     ) -> Result<Self> {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_timer(tracing_subscriber::fmt::time::uptime())
+            .with_target(false)
             .try_init();
 
         let handle = Handle::current();
 
-        madsim::net::NetSim::current().update_config(|cfg| {
+        if let Some(ref net) = network {
+            net.validate();
+        }
+
+        NetSim::current().update_config(|cfg| {
             if let Some(ref net) = network {
                 let lo = net
                     .send_latency_lo_ms
@@ -89,12 +85,19 @@ impl TestHarness {
             }
         });
 
+        let seed = Handle::current().seed();
+        let db_path = format!("{}/{COORDINATOR_NAME}-{seed}.db", std::env::temp_dir().display());
+        let _ = std::fs::remove_file(&db_path);
+
         Self::start_workers(&handle, workers);
-        let coordinator = Self::start_coordinator(&handle).await;
+        let (sender, node) = Self::start_coordinator(&handle, &db_path).await;
+        info!("started {} workers + coordinator", workers.len());
 
         Ok(Self {
             workers: workers.to_vec(),
-            coordinator,
+            coordinator_sender: sender,
+            coordinator_node: node,
+            db_path,
         })
     }
 
@@ -114,43 +117,60 @@ impl TestHarness {
         self.workers[index].clone()
     }
 
+    pub fn coordinator_name(&self) -> &str {
+        COORDINATOR_NAME
+    }
+
     pub async fn send<P, R>(&self, payload: P) -> R
     where
         P: Debug,
         Request<P, R>: Into<CoordinatorRequest>,
     {
         let (rx, req) = Request::new(payload);
-        self.coordinator.0.send_async(req.into()).await.unwrap();
-        rx.await.expect("coordinator should respond")
+        let sender = self.coordinator_sender.lock().unwrap().clone();
+        sender.send_async(req.into()).await.unwrap();
+        tokio::time::timeout(SEND_TIMEOUT, rx)
+            .await
+            .expect("coordinator did not respond within timeout")
+            .expect("coordinator dropped the request")
     }
 
-    async fn start_coordinator(net: &Handle) -> (flume::Sender<CoordinatorRequest>, NodeHandle) {
-        let (tx, rx) = flume::bounded(1);
+    async fn start_coordinator(
+        net: &Handle,
+        db_path: &str,
+    ) -> (Arc<std::sync::Mutex<flume::Sender<CoordinatorRequest>>>, NodeHandle) {
+        let shared_sender: Arc<std::sync::Mutex<flume::Sender<CoordinatorRequest>>> =
+            Arc::new(std::sync::Mutex::new(flume::bounded(0).0));
+
+        let (ready_tx, ready_rx) = flume::bounded(1);
 
         let node_handle = net
             .create_node()
-            .name("coordinator")
+            .name(COORDINATOR_NAME)
             .ip(COORDINATOR_IP.parse().unwrap())
             .init({
-                let tx = tx.clone();
+                let shared = shared_sender.clone();
+                let ready_tx = ready_tx.clone();
+                let db_path = db_path.to_string();
                 move || {
-                    let tx = tx.clone();
+                    let shared = shared.clone();
+                    let ready_tx = ready_tx.clone();
+                    let db_path = db_path.clone();
                     async move {
-                        let handle = start_for_test().await;
-                        tx.send_async(handle)
-                            .await
-                            .expect("Failed to send coordinator handle");
+                        let sender = start_for_sim(&db_path).await;
+                        *shared.lock().unwrap() = sender;
+                        let _ = ready_tx.send_async(()).await;
                         std::future::pending::<()>().await;
                     }
                 }
             })
             .build();
 
-        let coordinator_handle = rx
+        ready_rx
             .recv_async()
             .await
-            .expect("Failed to receive coordinator handle");
-        (coordinator_handle, node_handle)
+            .expect("failed to receive coordinator ready signal");
+        (shared_sender, node_handle)
     }
 
     fn start_workers(net: &Handle, workers: &[CreateWorker]) {
@@ -161,30 +181,35 @@ impl TestHarness {
                 .name(format!("worker-{idx}"))
                 .ip(ip.parse().unwrap())
                 .init(move || async move {
-                    info!("worker-{idx} starting");
-                    let worker = SingleNodeWorker::new(Arc::new(AtomicBool::new(false)));
-                    let svc = WorkerRpcServiceServer::new(worker);
+                    debug!("worker-{idx} starting");
+                    let worker = SingleNodeWorker::new();
 
                     Server::builder()
-                        .add_service(svc)
+                        .add_service(WorkerRpcServiceServer::new(worker))
                         .add_service(HealthServer::new(HealthServiceImpl))
                         .serve("0.0.0.0:8080".parse().unwrap())
                         .await
-                        .expect("Worker could not be started");
+                        .expect("worker could not be started");
                 })
                 .build();
         });
     }
 
     pub async fn register_workers(&self) {
+        let strategy = ExponentialBackoff::from_millis(100).map(jitter).take(10);
         for worker in &self.workers {
-            let result: anyhow::Result<model::worker::Model> = self.send(worker.clone()).await;
-            result.unwrap();
+            Retry::spawn(strategy.clone(), || async {
+                let result: anyhow::Result<worker::Model> =
+                    self.send(worker.clone()).await;
+                result
+            })
+            .await
+            .expect("worker registration failed after retries");
         }
 
         let num_workers = self.workers.len();
         loop {
-            let workers: Vec<model::worker::Model> = self.send(GetWorker::all()).await.unwrap();
+            let workers: Vec<worker::Model> = self.send(GetWorker::all()).await.unwrap();
 
             let active_count = workers
                 .iter()
@@ -192,19 +217,20 @@ impl TestHarness {
                 .count();
 
             if active_count == num_workers {
+                info!("all {num_workers} workers active");
                 return;
             }
 
-            info!("waiting for workers to become Active ({active_count}/{num_workers})");
+            info!("waiting for workers to become active ({active_count}/{num_workers})");
             tokio::time::sleep(POLL_INTERVAL).await;
         }
     }
 
     pub fn reset_network(&self) {
-        let net = madsim::net::NetSim::current();
+        let net = NetSim::current();
         let rt = Handle::current();
 
-        let all_names: Vec<String> = std::iter::once("coordinator".to_string())
+        let all_names: Vec<String> = std::iter::once(COORDINATOR_NAME.to_string())
             .chain((0..self.workers.len()).map(|i| self.worker_name(i)))
             .collect();
 
@@ -233,9 +259,14 @@ impl TestHarness {
         Handle::current().restart(&name);
     }
 
-    pub async fn wait_for_convergence(&self, query_ids: &[i64]) {
+    pub async fn wait_for_convergence(&self, query_ids: &[i64], max_wait: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + max_wait;
         loop {
-            let queries: Vec<model::query::Model> = self
+            if tokio::time::Instant::now() >= deadline {
+                info!("convergence timeout after {max_wait:?}");
+                return false;
+            }
+            let queries: Vec<query::Model> = self
                 .send(GetQuery::all().with_ids(query_ids.to_vec()))
                 .await
                 .unwrap();
@@ -244,15 +275,15 @@ impl TestHarness {
                 q.current_state == QueryState::Running || q.current_state.is_terminal()
             });
 
-            let workers: Vec<model::worker::Model> = self.send(GetWorker::all()).await.unwrap();
+            let workers: Vec<worker::Model> = self.send(GetWorker::all()).await.unwrap();
 
             let workers_settled = workers.iter().all(|w| {
-                w.desired_state != model::worker::DesiredWorkerState::Active
+                w.desired_state != DesiredWorkerState::Active
                     || w.current_state == WorkerState::Active
             });
 
             if all_settled && workers_settled {
-                return;
+                return true;
             }
 
             info!(
@@ -264,7 +295,7 @@ impl TestHarness {
                     .collect::<Vec<_>>(),
                 workers
                     .iter()
-                    .filter(|w| w.desired_state == model::worker::DesiredWorkerState::Active && w.current_state != WorkerState::Active)
+                    .filter(|w| w.desired_state == DesiredWorkerState::Active && w.current_state != WorkerState::Active)
                     .map(|w| (&w.host_addr, w.current_state))
                     .collect::<Vec<_>>()
             );

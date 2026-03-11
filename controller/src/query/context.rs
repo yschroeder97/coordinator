@@ -13,7 +13,7 @@ use model::query::StopMode;
 use model::query::fragment::{self, FragmentError, FragmentId, FragmentState};
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tracing::{error, info, warn};
+use tracing::{debug, error, warn};
 
 pub(crate) struct QueryContext {
     pub(crate) query: query::Model,
@@ -144,7 +144,7 @@ impl QueryContext {
                     Ok(_) => am.current_state = Set(target_state),
                     Err(e) => {
                         let error = FragmentError::from(e);
-                        warn!(fragment_id = fragment.id, %error, "Fragment transition failed");
+                        warn!(fragment_id = fragment.id, %error, "fragment transition failed");
                         am.current_state = Set(FragmentState::Failed);
                         am.error = Set(Some(error));
                     }
@@ -174,7 +174,7 @@ impl QueryContext {
             .filter_map(Result::err)
             .collect();
         if errors.is_empty() {
-            info!("All fragments stopped");
+            debug!("All fragments stopped");
         } else {
             for e in errors {
                 error!("Failed to stop fragment: {e}");
@@ -190,7 +190,7 @@ impl QueryContext {
             .filter_map(Result::err)
             .collect();
         if errors.is_empty() {
-            info!("All fragments unregistered");
+            debug!("All fragments unregistered");
         } else {
             for e in errors {
                 error!("Failed to unregister fragment: {e}");

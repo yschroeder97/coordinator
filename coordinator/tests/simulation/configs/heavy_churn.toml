@@ -1,24 +1,33 @@
-timeout_secs = 600
-min_workers = 4
+[[test]]
+title = "heavy_churn"
+timeout = 600
 
-[network]
-packet_loss_rate = 0.05
+  [test.network]
+  packet_loss_rate = 0.05
 
-[[workload]]
-name = "CrudWorkload"
-min_ops = 20
-max_ops = 50
-max_sleep_secs = 3
+  [[test.workload]]
+  test_name = "Cluster"
+  test_duration = 60.0
+  max_sleep_secs = 3
+  drop_weight = 3
 
-[[workload]]
-name = "Attrition"
-kill_rate = 0.4
-kill_interval_secs = 3
-restart_delay_lo_secs = 1
-restart_delay_hi_secs = 5
+  [[test.workload]]
+  test_name = "Query"
+  test_duration = 60.0
+  max_sleep_secs = 3
 
-[[workload]]
-name = "NetworkPartition"
-partition_rate = 0.25
-duration_lo_secs = 2
-duration_hi_secs = 8
+  [[test.workload]]
+  test_name = "Attrition"
+  test_duration = 60.0
+  kill_rate = 0.4
+  kill_interval_secs = 3
+  restart_delay_lo_secs = 1
+  restart_delay_hi_secs = 5
+  kill_coordinator = true
+
+  [[test.workload]]
+  test_name = "NetworkPartition"
+  test_duration = 60.0
+  partition_rate = 0.25
+  duration_lo_secs = 2
+  duration_hi_secs = 8
