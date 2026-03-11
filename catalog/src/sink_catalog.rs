@@ -94,7 +94,7 @@ mod tests {
 
         let sinks = catalog
             .sink
-            .get_sink(GetSink::all().by_name(req.sink.name.clone()))
+            .get_sink(GetSink::all().by_name(req.sink.name))
             .await
             .unwrap();
         assert!(sinks.is_empty(), "Sink should be deleted");

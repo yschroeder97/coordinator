@@ -14,7 +14,7 @@ use sea_orm::{
     ColIdx, ColumnType, DbErr, QueryResult, TryFromU64, TryGetError, TryGetable, Value, sea_query,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NetworkAddr {
     pub host: HostName,
     pub port: u16,

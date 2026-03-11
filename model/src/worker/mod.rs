@@ -147,7 +147,7 @@ impl crate::IntoCondition for GetWorker {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DropWorker {
     pub host_addr: HostAddr,
 }

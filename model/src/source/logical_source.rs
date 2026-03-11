@@ -38,12 +38,12 @@ pub struct CreateLogicalSource {
     pub schema: Schema,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct GetLogicalSource {
     pub with_name: LogicalSourceName,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DropLogicalSource {
     pub with_name: LogicalSourceName,
 }

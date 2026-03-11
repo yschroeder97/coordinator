@@ -8,7 +8,7 @@ pub struct CycleDetected {
     pub participants: Vec<HostAddr>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct WorkerTopology {
     pub workers: Vec<super::Model>,
     pub edges: Vec<(HostAddr, HostAddr)>,

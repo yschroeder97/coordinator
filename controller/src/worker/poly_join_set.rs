@@ -60,7 +60,6 @@ impl<T> Drop for JoinSet<T> {
 }
 
 #[cfg(madsim)]
-#[derive(Debug)]
 pub struct AbortHandle(tokio::task::AbortHandle);
 
 #[cfg(madsim)]

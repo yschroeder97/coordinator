@@ -35,7 +35,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
 toml = "0.8"
 serde = { workspace = true }
-tokio-util = "0.7"
 async-trait.workspace = true
 inventory.workspace = true
 libtest-mimic = "0.8"
