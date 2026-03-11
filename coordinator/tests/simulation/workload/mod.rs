@@ -5,14 +5,87 @@ pub mod cluster;
 pub mod partition;
 pub mod query;
 
-use crate::harness::TestHarness;
+use crate::harness::{TestHarness, arb};
 use async_trait::async_trait;
 use madsim::rand::Rng;
 use model::query::fragment;
 use model::query::query_state::QueryState;
+use proptest::prelude::*;
+use proptest::strategy::Union;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
+use std::fmt::Debug;
+use std::pin::Pin;
+use std::time::Duration;
 use tracing::info;
+
+pub async fn run_timed_ops<'a, F>(duration: Duration, name: &str, mut step: F) -> usize
+where
+    F: FnMut(usize) -> Pin<Box<dyn std::future::Future<Output = ()> + 'a>>,
+{
+    let mut op_index = 0;
+    let _ = tokio::time::timeout(duration, async {
+        loop {
+            step(op_index).await;
+            op_index += 1;
+        }
+    })
+    .await;
+    info!("{name}: completed {op_index} ops");
+    op_index
+}
+
+pub fn generate_weighted<Op: Clone + Debug>(strategies: Vec<(u32, BoxedStrategy<Op>)>) -> Op {
+    let strategy = Union::new_weighted(strategies);
+    arb(strategy)
+}
+
+pub fn sleep_strategy<Op>(max_secs: u64, wrap: fn(Duration) -> Op) -> (u32, BoxedStrategy<Op>) {
+    (1, (0..=max_secs).prop_map(move |s| wrap(Duration::from_secs(s))).boxed())
+}
+
+pub struct InvariantContext {
+    created_query_ids: Vec<i64>,
+    dropped_query_ids: Vec<i64>,
+}
+
+impl InvariantContext {
+    pub fn new(created_query_ids: Vec<i64>, dropped_query_ids: Vec<i64>) -> Self {
+        Self {
+            created_query_ids,
+            dropped_query_ids,
+        }
+    }
+
+    pub fn query_ids(&self) -> &[i64] {
+        &self.created_query_ids
+    }
+
+    pub fn dropped_query_ids(&self) -> &[i64] {
+        &self.dropped_query_ids
+    }
+
+    pub fn empty() -> Self {
+        Self::new(Vec::new(), Vec::new())
+    }
+}
+
+#[async_trait(?Send)]
+pub trait Invariant {
+    fn name(&self) -> &str;
+    async fn check(&self, harness: &TestHarness, ctx: &InvariantContext);
+}
+
+pub async fn check_invariants(
+    invariants: &[&dyn Invariant],
+    harness: &TestHarness,
+    ctx: &InvariantContext,
+) {
+    for inv in invariants {
+        inv.check(harness, ctx).await;
+        info!("invariant {}: ok", inv.name());
+    }
+}
 
 #[async_trait(?Send)]
 pub trait Workload {
@@ -92,7 +165,10 @@ pub fn inject_failure_workloads(workloads: &mut Vec<Box<dyn Workload>>) {
     }
 }
 
-pub fn derive_query_state(fragments: &[fragment::Model]) -> QueryState {
+pub fn derive_query_state(
+    fragments: &[fragment::Model],
+    current_state: QueryState,
+) -> QueryState {
     if fragments
         .iter()
         .any(|f| f.current_state == fragment::FragmentState::Failed)
@@ -125,7 +201,7 @@ pub fn derive_query_state(fragments: &[fragment::Model]) -> QueryState {
     {
         return QueryState::Registered;
     }
-    QueryState::Pending
+    current_state
 }
 
 

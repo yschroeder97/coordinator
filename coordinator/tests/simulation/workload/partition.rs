@@ -1,6 +1,8 @@
 #![cfg(madsim)]
 use crate::harness::TestHarness;
-use crate::workload::{FailureInjectorFactory, Workload, WorkloadFactory, parse_options};
+use crate::workload::{
+    FailureInjectorFactory, Workload, WorkloadFactory, parse_options, run_timed_ops,
+};
 use async_trait::async_trait;
 use madsim::net::NetSim;
 use madsim::rand::{Rng, thread_rng};
@@ -92,13 +94,13 @@ impl Workload for PartitionWorkload {
         let net = NetSim::current();
         let rt = Handle::current();
 
-        let _ = tokio::time::timeout(self.test_duration, async {
-            loop {
+        run_timed_ops(self.test_duration, self.name(), |_| {
+            Box::pin(async {
                 tokio::time::sleep(self.partition_interval).await;
 
                 let mut rng = thread_rng();
                 if !rng.gen_bool(self.partition_rate) {
-                    continue;
+                    return;
                 }
 
                 let src_idx = rng.gen_range(0..all_names.len());
@@ -115,7 +117,7 @@ impl Workload for PartitionWorkload {
 
                 let (src_id, dst_id) = match (src_node, dst_node) {
                     (Some(s), Some(d)) => (s.id(), d.id()),
-                    _ => continue,
+                    _ => return,
                 };
 
                 let duration = rng.gen_range(self.duration.clone());
@@ -128,7 +130,7 @@ impl Workload for PartitionWorkload {
                     net_ref.unclog_link(src_id, dst_id);
                     info!("partition: heal {src_name} -> {dst_name}");
                 });
-            }
+            })
         })
         .await;
     }

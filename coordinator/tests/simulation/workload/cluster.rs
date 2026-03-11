@@ -1,11 +1,13 @@
 #![cfg(madsim)]
-use crate::harness::{TestHarness, arb};
-use crate::workload::{Workload, WorkloadFactory, parse_options};
+use crate::harness::TestHarness;
+use crate::workload::{
+    Invariant, InvariantContext, Workload, WorkloadFactory, check_invariants, generate_weighted,
+    parse_options, run_timed_ops, sleep_strategy,
+};
 use async_trait::async_trait;
 use model::worker;
 use model::worker::{DesiredWorkerState, DropWorker, GetWorker, WorkerState};
 use proptest::prelude::*;
-use proptest::strategy::Union;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -107,12 +109,8 @@ impl GeneratorState {
             ));
         }
 
-        strategies.push((
-            sleep_weight,
-            (0..=max_sleep_secs)
-                .prop_map(|s| ClusterOp::Sleep(Duration::from_secs(s)))
-                .boxed(),
-        ));
+        let (_, s) = sleep_strategy(max_sleep_secs, ClusterOp::Sleep);
+        strategies.push((sleep_weight, s));
 
         strategies
     }
@@ -147,8 +145,7 @@ impl ClusterWorkload {
             self.drop_weight,
             self.sleep_weight,
         );
-        let strategy = Union::new_weighted(strategies);
-        let op = arb(strategy);
+        let op = generate_weighted(strategies);
         gen_state.apply(&op);
         op
     }
@@ -163,7 +160,7 @@ impl ClusterWorkload {
         match op {
             ClusterOp::CreateWorker(idx) => {
                 info!("cluster[{i}]: CreateWorker({idx})");
-                harness.ensure_node_running(idx);
+                harness.restart_worker(idx);
                 let worker = harness.worker_config(idx);
 
                 let workers: Vec<worker::Model> =
@@ -202,17 +199,6 @@ impl ClusterWorkload {
         }
     }
 
-    fn check_worker_convergence(&self, workers: &[worker::Model]) {
-        for w in workers {
-            assert!(
-                w.desired_state != DesiredWorkerState::Active
-                    || w.current_state == WorkerState::Active,
-                "worker_convergence: worker {} desired=Active current={:?}",
-                w.host_addr,
-                w.current_state
-            );
-        }
-    }
 }
 
 #[async_trait(?Send)]
@@ -231,24 +217,41 @@ impl Workload for ClusterWorkload {
 
         let mut gen_state = GeneratorState::new(harness.num_workers());
         let mut result = ClusterState::default();
-        let mut op_index = 0;
 
-        let _ = tokio::time::timeout(self.test_duration, async {
-            loop {
-                let op = self.generate_op(&mut gen_state);
-                self.execute_op(harness, op_index, op, &mut result).await;
-                op_index += 1;
-            }
+        run_timed_ops(self.test_duration, self.name(), |i| {
+            let op = self.generate_op(&mut gen_state);
+            Box::pin(self.execute_op(harness, i, op, &mut result))
         })
         .await;
 
-        info!("{}: completed {} ops", self.name(), op_index);
         *self.state.lock().unwrap() = result;
     }
 
     async fn check(&self, harness: &TestHarness) {
+        let ctx = InvariantContext::empty();
+        check_invariants(&[&WorkerConvergence], harness, &ctx).await;
+    }
+}
+
+pub struct WorkerConvergence;
+
+#[async_trait(?Send)]
+impl Invariant for WorkerConvergence {
+    fn name(&self) -> &str {
+        "worker_convergence"
+    }
+
+    async fn check(&self, harness: &TestHarness, _ctx: &InvariantContext) {
         let workers: Vec<worker::Model> = harness.send(GetWorker::all()).await.unwrap();
-        self.check_worker_convergence(&workers);
+        for w in &workers {
+            assert!(
+                w.desired_state != DesiredWorkerState::Active
+                    || w.current_state == WorkerState::Active,
+                "worker_convergence: worker {} desired=Active current={:?}",
+                w.host_addr,
+                w.current_state
+            );
+        }
     }
 }
 

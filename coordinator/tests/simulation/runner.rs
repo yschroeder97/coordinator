@@ -11,24 +11,23 @@ use model::worker::CreateWorker;
 use std::time::Duration;
 use tracing::info;
 
-const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
-
 pub async fn run_test(spec: TestSpec) {
     let seed = Handle::current().seed();
     let title = spec.title.as_deref().unwrap_or("unnamed");
     let timeout = spec.timeout();
+    let convergence_timeout = spec.convergence_timeout();
 
     info!("=== simulation test: {title} (seed={seed}) ===");
-    info!("timeout={timeout:?}");
+    info!("timeout={timeout:?}, convergence_timeout={convergence_timeout:?}");
 
-    let result = tokio::time::timeout(timeout, run_test_inner(spec)).await;
+    let result = tokio::time::timeout(timeout, run_test_inner(spec, convergence_timeout)).await;
     match result {
         Ok(()) => info!("=== simulation test PASSED (seed={seed}) ==="),
         Err(_) => panic!("simulation test TIMED OUT after {timeout:?} (seed={seed})"),
     }
 }
 
-async fn run_test_inner(spec: TestSpec) {
+async fn run_test_inner(spec: TestSpec, convergence_timeout: Duration) {
     let should_buggify = spec
         .buggify
         .unwrap_or_else(|| thread_rng().gen_bool(TestSpec::buggify_probability()));
@@ -86,11 +85,11 @@ async fn run_test_inner(spec: TestSpec) {
 
     info!("waiting for convergence ({} queries)", all_query_ids.len());
     let converged = harness
-        .wait_for_convergence(&all_query_ids, CONVERGENCE_TIMEOUT)
+        .wait_for_convergence(&all_query_ids, convergence_timeout)
         .await;
     assert!(
         converged,
-        "system did not converge within {CONVERGENCE_TIMEOUT:?}"
+        "system did not converge within {convergence_timeout:?}"
     );
     info!("convergence reached");
 

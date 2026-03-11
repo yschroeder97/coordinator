@@ -1,6 +1,8 @@
 #![cfg(madsim)]
 use crate::harness::TestHarness;
-use crate::workload::{FailureInjectorFactory, Workload, WorkloadFactory, parse_options};
+use crate::workload::{
+    FailureInjectorFactory, Workload, WorkloadFactory, parse_options, run_timed_ops,
+};
 use async_trait::async_trait;
 use madsim::rand::{Rng, thread_rng};
 use madsim::runtime::Handle;
@@ -90,8 +92,8 @@ impl Workload for AttritionWorkload {
             node_names.push(harness.coordinator_name().to_string());
         }
 
-        let _ = tokio::time::timeout(self.test_duration, async {
-            loop {
+        run_timed_ops(self.test_duration, self.name(), |_| {
+            Box::pin(async {
                 tokio::time::sleep(self.kill_interval).await;
 
                 let mut rng = thread_rng();
@@ -116,7 +118,7 @@ impl Workload for AttritionWorkload {
                         Handle::current().restart(*name);
                     }
                 }
-            }
+            })
         })
         .await;
 

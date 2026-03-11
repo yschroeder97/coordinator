@@ -5,7 +5,6 @@ use anyhow::Result;
 use common::request::Request;
 use coordinator::coordinator::{CoordinatorRequest, start_for_sim};
 use futures::future::join_all;
-use madsim::rand::{Rng, thread_rng};
 use madsim::net::NetSim;
 use madsim::runtime::{Handle, NodeHandle};
 use model::{query, worker};
@@ -30,11 +29,19 @@ const DEFAULT_SEND_LATENCY_HI: Duration = Duration::from_millis(100);
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
+const CHACHA_SEED_BYTES: usize = 32;
+const SEED_CHUNK_SIZE: usize = 8;
 
 thread_local! {
     static RUNNER: std::cell::RefCell<TestRunner> = std::cell::RefCell::new({
-        let seed: [u8; 32] = thread_rng().r#gen();
-        let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
+        let seed = Handle::current().seed();
+        let seed_bytes = seed.to_le_bytes();
+        let mut full_seed = [0u8; CHACHA_SEED_BYTES];
+        for (i, chunk) in full_seed.chunks_exact_mut(SEED_CHUNK_SIZE).enumerate() {
+            chunk.copy_from_slice(&seed_bytes);
+            chunk[0] = chunk[0].wrapping_add(i as u8);
+        }
+        let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &full_seed);
         TestRunner::new_with_rng(Default::default(), rng)
     });
 }
@@ -254,7 +261,7 @@ impl TestHarness {
         });
     }
 
-    pub fn ensure_node_running(&self, index: usize) {
+    pub fn restart_worker(&self, index: usize) {
         let name = self.worker_name(index);
         Handle::current().restart(&name);
     }

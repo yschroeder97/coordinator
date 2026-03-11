@@ -1,17 +1,18 @@
 #![cfg(madsim)]
 use crate::harness::{TestHarness, arb};
-use crate::workload::{Workload, WorkloadFactory, derive_query_state, parse_options};
+use crate::workload::{
+    Invariant, InvariantContext, Workload, WorkloadFactory, check_invariants, derive_query_state,
+    generate_weighted, parse_options, run_timed_ops, sleep_strategy,
+};
 use async_trait::async_trait;
-use model::{query, worker};
 use model::query::fragment;
 use model::query::fragment::GetFragment;
 use model::query::query_state::QueryState;
-use model::Generate;
 use model::query::{CreateQuery, DropQuery, GetQuery, StopMode};
 use model::worker::endpoint::HostAddr;
 use model::worker::GetWorker;
+use model::{query, worker, Generate};
 use proptest::prelude::*;
-use proptest::strategy::Union;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -114,12 +115,8 @@ impl GeneratorState {
             ));
         }
 
-        strategies.push((
-            sleep_weight,
-            (0..=max_sleep_secs)
-                .prop_map(|s| QueryOp::Sleep(Duration::from_secs(s)))
-                .boxed(),
-        ));
+        let (_, s) = sleep_strategy(max_sleep_secs, QueryOp::Sleep);
+        strategies.push((sleep_weight, s));
 
         strategies
     }
@@ -167,8 +164,7 @@ impl QueryWorkload {
             self.sleep_weight,
             max_concurrent,
         );
-        let strategy = Union::new_weighted(strategies);
-        let op = arb(strategy);
+        let op = generate_weighted(strategies);
         gen_state.apply(&op);
         op
     }
@@ -220,30 +216,6 @@ impl QueryWorkload {
         }
     }
 
-    fn liveness(&self, queries: &[query::Model]) {
-        let non_settled: Vec<_> = queries
-            .iter()
-            .filter(|q| q.current_state != QueryState::Running && !q.current_state.is_terminal())
-            .map(|q| (q.id, q.current_state))
-            .collect();
-        assert!(
-            non_settled.is_empty(),
-            "liveness: queries not Running or terminal: {non_settled:?}"
-        );
-    }
-
-    fn termination(&self, queries: &[query::Model], dropped_ids: &[i64]) {
-        for &qid in dropped_ids {
-            if let Some(q) = queries.iter().find(|q| q.id == qid) {
-                assert!(
-                    q.current_state.is_terminal(),
-                    "termination: dropped query {} in state {:?}",
-                    q.id,
-                    q.current_state
-                );
-            }
-        }
-    }
 }
 
 #[async_trait(?Send)]
@@ -281,23 +253,12 @@ impl Workload for QueryWorkload {
         let mut gen_state = GeneratorState::new();
         let mut created_ids = Vec::new();
         let mut dropped_ids = Vec::new();
-        let mut op_index = 0;
 
-        let _ = tokio::time::timeout(self.test_duration, async {
-            loop {
-                let op = self.generate_op(&mut gen_state, max_concurrent);
-                self.execute_op(harness, op_index, op, &mut created_ids, &mut dropped_ids)
-                    .await;
-                op_index += 1;
-            }
+        run_timed_ops(self.test_duration, self.name(), |i| {
+            let op = self.generate_op(&mut gen_state, max_concurrent);
+            Box::pin(self.execute_op(harness, i, op, &mut created_ids, &mut dropped_ids))
         })
         .await;
-
-        info!(
-            "completed {op_index} ops (created={}, dropped={})",
-            created_ids.len(),
-            dropped_ids.len()
-        );
 
         let mut state = self.state.lock().unwrap();
         state.created_query_ids = created_ids;
@@ -314,20 +275,99 @@ impl Workload for QueryWorkload {
             )
         };
 
-        let queries: Vec<query::Model> = if created_ids.is_empty() {
-            Vec::new()
-        } else {
-            harness
-                .send(GetQuery::all().with_ids(created_ids.clone()))
-                .await
-                .unwrap()
+        let ctx = InvariantContext::new(created_ids, dropped_ids);
+        let caps = CapacityConservation {
+            initial_capacities: initial_caps,
         };
-        let workers: Vec<worker::Model> = harness.send(GetWorker::all()).await.unwrap();
 
-        self.liveness(&queries);
-        self.termination(&queries, &dropped_ids);
+        check_invariants(
+            &[
+                &QueryLiveness,
+                &QueryTermination,
+                &FragmentCoherence,
+                &caps,
+            ],
+            harness,
+            &ctx,
+        )
+        .await;
+    }
+}
 
-        for &qid in &created_ids {
+pub struct QueryLiveness;
+
+#[async_trait(?Send)]
+impl Invariant for QueryLiveness {
+    fn name(&self) -> &str {
+        "query_liveness"
+    }
+
+    async fn check(&self, harness: &TestHarness, ctx: &InvariantContext) {
+        if ctx.query_ids().is_empty() {
+            return;
+        }
+        let queries: Vec<query::Model> = harness
+            .send(GetQuery::all().with_ids(ctx.query_ids().to_vec()))
+            .await
+            .unwrap();
+        let non_settled: Vec<_> = queries
+            .iter()
+            .filter(|q| q.current_state != QueryState::Running && !q.current_state.is_terminal())
+            .map(|q| (q.id, q.current_state))
+            .collect();
+        assert!(
+            non_settled.is_empty(),
+            "query_liveness: queries not Running or terminal: {non_settled:?}"
+        );
+    }
+}
+
+pub struct QueryTermination;
+
+#[async_trait(?Send)]
+impl Invariant for QueryTermination {
+    fn name(&self) -> &str {
+        "query_termination"
+    }
+
+    async fn check(&self, harness: &TestHarness, ctx: &InvariantContext) {
+        if ctx.query_ids().is_empty() || ctx.dropped_query_ids().is_empty() {
+            return;
+        }
+        let queries: Vec<query::Model> = harness
+            .send(GetQuery::all().with_ids(ctx.query_ids().to_vec()))
+            .await
+            .unwrap();
+        for &qid in ctx.dropped_query_ids() {
+            if let Some(q) = queries.iter().find(|q| q.id == qid) {
+                assert!(
+                    q.current_state.is_terminal(),
+                    "query_termination: dropped query {} in state {:?}",
+                    q.id,
+                    q.current_state
+                );
+            }
+        }
+    }
+}
+
+pub struct FragmentCoherence;
+
+#[async_trait(?Send)]
+impl Invariant for FragmentCoherence {
+    fn name(&self) -> &str {
+        "fragment_coherence"
+    }
+
+    async fn check(&self, harness: &TestHarness, ctx: &InvariantContext) {
+        if ctx.query_ids().is_empty() {
+            return;
+        }
+        let queries: Vec<query::Model> = harness
+            .send(GetQuery::all().with_ids(ctx.query_ids().to_vec()))
+            .await
+            .unwrap();
+        for &qid in ctx.query_ids() {
             if let Some(query) = queries.iter().find(|q| q.id == qid) {
                 let fragments: Vec<fragment::Model> =
                     harness.send(GetFragment::for_query(qid)).await.unwrap();
@@ -336,16 +376,39 @@ impl Workload for QueryWorkload {
                     continue;
                 }
 
-                let expected = derive_query_state(&fragments);
+                let expected = derive_query_state(&fragments, query.current_state);
                 assert_eq!(
                     query.current_state, expected,
-                    "query_state_matches_fragments: query {qid} is {:?} but fragments imply {:?}. fragments: {:?}",
+                    "fragment_coherence: query {qid} is {:?} but fragments imply {:?}. fragments: {:?}",
                     query.current_state,
                     expected,
                     fragments.iter().map(|f| (f.id, f.current_state)).collect::<Vec<_>>()
                 );
             }
         }
+    }
+}
+
+pub struct CapacityConservation {
+    initial_capacities: HashMap<HostAddr, i32>,
+}
+
+#[async_trait(?Send)]
+impl Invariant for CapacityConservation {
+    fn name(&self) -> &str {
+        "capacity_conservation"
+    }
+
+    async fn check(&self, harness: &TestHarness, ctx: &InvariantContext) {
+        let queries: Vec<query::Model> = if ctx.query_ids().is_empty() {
+            Vec::new()
+        } else {
+            harness
+                .send(GetQuery::all().with_ids(ctx.query_ids().to_vec()))
+                .await
+                .unwrap()
+        };
+        let workers: Vec<worker::Model> = harness.send(GetWorker::all()).await.unwrap();
 
         let mut used_per_worker: HashMap<HostAddr, i32> = HashMap::new();
         for q in &queries {
@@ -360,12 +423,16 @@ impl Workload for QueryWorkload {
         }
 
         for w in &workers {
-            if let Some(&initial) = initial_caps.get(&w.host_addr) {
+            if let Some(&initial) = self.initial_capacities.get(&w.host_addr) {
                 let used = used_per_worker.get(&w.host_addr).copied().unwrap_or(0);
                 assert_eq!(
-                    w.capacity + used, initial,
+                    w.capacity + used,
+                    initial,
                     "capacity_conservation: worker {} capacity={} used={} expected_initial={}",
-                    w.host_addr, w.capacity, used, initial
+                    w.host_addr,
+                    w.capacity,
+                    used,
+                    initial
                 );
             }
         }

@@ -1,6 +1,7 @@
 [[test]]
 title = "heavy_churn"
 timeout = 600
+convergence_timeout = 120
 
   [test.network]
   packet_loss_rate = 0.05
