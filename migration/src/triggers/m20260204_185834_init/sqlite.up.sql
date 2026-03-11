@@ -107,15 +107,16 @@ BEGIN
     END;
 END;
 
-CREATE TRIGGER IF NOT EXISTS prevent_worker_delete_with_active_fragments
-    BEFORE DELETE ON worker
+CREATE TRIGGER IF NOT EXISTS prevent_worker_drop_with_active_fragments
+    BEFORE UPDATE OF desired_state ON worker
+    WHEN NEW.desired_state = 'Removed' AND OLD.desired_state != 'Removed'
 BEGIN
     SELECT CASE
         WHEN EXISTS (
             SELECT 1 FROM fragment
-            WHERE host_addr = OLD.host_addr
+            WHERE host_addr = NEW.host_addr
             AND current_state NOT IN ('Completed', 'Stopped', 'Failed')
         ) THEN
-            RAISE(ABORT, 'Cannot delete worker: non-terminal fragments still reference it')
+            RAISE(ABORT, 'Cannot drop worker: non-terminal fragments still reference it')
     END;
 END;

@@ -288,6 +288,41 @@ mod tests {
             .expect("grpc_addr matching another worker's host_addr should be allowed");
     }
 
+    async fn prop_worker_drop_blocked_by_active_fragments(req: CreateWorker) {
+        let catalog = Catalog::for_test().await;
+        catalog.worker.create_worker(req.clone()).await.unwrap();
+
+        let query = catalog
+            .query
+            .create_query(CreateQuery::new("SELECT x FROM y".to_string()))
+            .await
+            .unwrap();
+        catalog
+            .query
+            .create_fragments(
+                &query,
+                vec![CreateFragment {
+                    query_id: query.id,
+                    host_addr: req.host_addr.clone(),
+                    grpc_addr: req.grpc_addr,
+                    plan: serde_json::json!({}),
+                    used_capacity: 0,
+                    has_source: false,
+                }],
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            catalog
+                .worker
+                .drop_worker(DropWorker::new(req.host_addr))
+                .await
+                .is_err(),
+            "Worker with active fragments should not be droppable"
+        );
+    }
+
     async fn prop_worker_delete_blocked_by_active_fragments(req: CreateWorker) {
         let catalog = Catalog::for_test().await;
         catalog.worker.create_worker(req.clone()).await.unwrap();
@@ -304,7 +339,7 @@ mod tests {
                 vec![CreateFragment {
                     query_id: query.id,
                     host_addr: req.host_addr.clone(),
-                    grpc_addr: req.grpc_addr.clone(),
+                    grpc_addr: req.grpc_addr,
                     plan: serde_json::json!({}),
                     used_capacity: 0,
                     has_source: false,
@@ -335,7 +370,7 @@ mod tests {
                 vec![CreateFragment {
                     query_id: query.id,
                     host_addr: req.host_addr.clone(),
-                    grpc_addr: req.grpc_addr.clone(),
+                    grpc_addr: req.grpc_addr,
                     plan: serde_json::json!({}),
                     used_capacity: 0,
                     has_source: false,
@@ -424,7 +459,7 @@ mod tests {
         let catalog = Catalog::for_test().await;
         catalog.worker.create_worker(w2.clone()).await.unwrap();
 
-        let w1_dup_peer = w1.with_peers(vec![w2.host_addr.clone(), w2.host_addr.clone()]);
+        let w1_dup_peer = w1.with_peers(vec![w2.host_addr.clone(), w2.host_addr]);
         assert!(
             catalog.worker.create_worker(w1_dup_peer).await.is_err(),
             "Duplicate peer entries should violate composite PK"
@@ -642,6 +677,13 @@ mod tests {
         fn grpc_addr_may_equal_other_host_addr((w1, w2) in (CreateWorker::generate(), CreateWorker::generate())) {
             test_prop(|| async move {
                 prop_grpc_addr_may_equal_other_host_addr(w1, w2).await;
+            });
+        }
+
+        #[test]
+        fn worker_drop_blocked_by_active_fragments(req in CreateWorker::generate()) {
+            test_prop(|| async move {
+                prop_worker_drop_blocked_by_active_fragments(req).await;
             });
         }
 
