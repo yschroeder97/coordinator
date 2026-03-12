@@ -1,186 +1,114 @@
-use crate::query::Completed;
+use anyhow::Result;
 use crate::query::context::QueryContext;
-use crate::query::lifecycle::pending::Pending;
-use crate::query::lifecycle::planned::Planned;
-use crate::query::lifecycle::registered::Registered;
-use crate::query::lifecycle::running::Running;
-use catalog::Catalog;
-use madsim::buggify::buggify;
-use model::query;
+use crate::query::running;
 use model::query::StopMode;
+use model::query::fragment::FragmentState;
 use model::query::query_state::QueryState;
-use std::time::Duration;
-use tracing::{debug, info, info_span, warn};
+use tracing::{debug, error, info, info_span, warn};
 
-pub(crate) enum QueryStateInternal {
-    Pending(Pending),
-    Planned(Planned),
-    Registered(Registered),
-    Running(Running),
-    Completed,
-    Stopped,
-    Failed,
+async fn plan_query(ctx: &mut QueryContext) -> Result<()> {
+    #[cfg(feature = "testing")]
+    let requests = {
+        use model::query::fragment;
+        use model::worker::GetWorker;
+        let workers = ctx.catalog.worker.get_worker(GetWorker::all()).await?;
+        fragment::CreateFragment::for_models(&ctx.query, &workers)
+    };
+    #[cfg(not(feature = "testing"))]
+    let requests: Vec<model::query::fragment::CreateFragment> = Vec::new();
+
+    let (query, fragments) = ctx
+        .catalog
+        .query
+        .create_fragments(&ctx.query, requests)
+        .await?;
+    ctx.query = query;
+    ctx.fragments = fragments;
+    Ok(())
 }
 
-impl From<QueryStateInternal> for QueryState {
-    fn from(value: QueryStateInternal) -> Self {
-        QueryState::from(&value)
-    }
-}
-
-impl From<&QueryStateInternal> for QueryState {
-    fn from(value: &QueryStateInternal) -> Self {
-        match value {
-            QueryStateInternal::Pending(_) => QueryState::Pending,
-            QueryStateInternal::Planned(_) => QueryState::Planned,
-            QueryStateInternal::Registered(_) => QueryState::Registered,
-            QueryStateInternal::Running(_) => QueryState::Running,
-            QueryStateInternal::Completed => QueryState::Completed,
-            QueryStateInternal::Stopped => QueryState::Stopped,
-            QueryStateInternal::Failed => QueryState::Failed,
+async fn transition(ctx: &mut QueryContext) -> Result<()> {
+    match ctx.query.current_state {
+        QueryState::Pending => plan_query(ctx).await,
+        QueryState::Planned => {
+            let results = ctx.register_fragments().await;
+            ctx.apply_transition_results(results, FragmentState::Registered)
+                .await
         }
-    }
-}
-
-impl QueryStateInternal {
-    async fn from_current(query: &query::Model, catalog: &Catalog) -> Self {
-        match query.current_state {
-            QueryState::Pending => QueryStateInternal::Pending(Pending),
-            QueryState::Planned | QueryState::Registered | QueryState::Running => {
-                let fragments = catalog.query.get_fragments(query.id).await.unwrap();
-                match query.current_state {
-                    QueryState::Planned => QueryStateInternal::Planned(Planned { fragments }),
-                    QueryState::Registered => {
-                        QueryStateInternal::Registered(Registered { fragments })
-                    }
-                    QueryState::Running => QueryStateInternal::Running(Running { fragments }),
-                    _ => unreachable!(),
-                }
-            }
-            QueryState::Completed | QueryState::Stopped | QueryState::Failed => {
-                panic!("Terminal state should not be reconciled")
-            }
+        QueryState::Registered => {
+            let results = ctx.start_fragments().await;
+            ctx.apply_transition_results(results, FragmentState::Started)
+                .await
         }
+        QueryState::Running => running::poll_until_complete(ctx).await,
+        _ => unreachable!(),
     }
 }
 
-impl From<Pending> for QueryStateInternal {
-    fn from(s: Pending) -> Self {
-        QueryStateInternal::Pending(s)
-    }
-}
-
-impl From<Planned> for QueryStateInternal {
-    fn from(s: Planned) -> Self {
-        QueryStateInternal::Planned(s)
-    }
-}
-
-impl From<Registered> for QueryStateInternal {
-    fn from(s: Registered) -> Self {
-        QueryStateInternal::Registered(s)
-    }
-}
-
-impl From<Running> for QueryStateInternal {
-    fn from(s: Running) -> Self {
-        QueryStateInternal::Running(s)
-    }
-}
-
-impl From<Completed> for QueryStateInternal {
-    fn from(_: Completed) -> Self {
-        QueryStateInternal::Completed
-    }
-}
-
-pub(crate) trait Transition: Sized {
-    type Next: Into<QueryStateInternal>;
-
-    async fn transition(&mut self, ctx: &mut QueryContext) -> anyhow::Result<Self::Next>;
-    async fn rollback(self, ctx: &mut QueryContext, mode: StopMode);
-}
-
-async fn try_transition<T: Transition>(
-    mut state: T,
+async fn try_transition(
     ctx: &mut QueryContext,
     stop_rx: &mut flume::Receiver<StopMode>,
     span: &tracing::Span,
-) -> QueryStateInternal {
-    if buggify() {
-        panic!("buggify: reconciler_try_transition_panic");
-    }
+) -> bool {
     let from_state = ctx.query.current_state;
     tokio::select! {
-        result = state.transition(ctx) => {
+        result = transition(ctx) => {
             let _guard = span.enter();
             match result {
-                Ok(next) => {
-                    let next = next.into();
-                    debug!(from = %from_state, to = %QueryState::from(&next), "transition succeeded");
-                    next
+                Ok(()) => {
+                    debug!(from = %from_state, to = %ctx.query.current_state, "transition succeeded");
+                    !ctx.query.current_state.is_terminal()
                 }
                 Err(e) => {
+                    warn!(from = %from_state, "transition failed: {e:#}");
                     drop(_guard);
-                    state.rollback(ctx, StopMode::Forceful).await;
-                    let _guard = span.enter();
-                    let root = e.root_cause().to_string();
-                    warn!(from = %from_state, "transition failed: {root}");
-                    if ctx.query.error.is_none() {
-                        ctx.persist_failed(root).await;
+                    if from_state == QueryState::Pending {
+                        if let Err(e) = ctx.catalog.query.fail_pending_query(ctx.query.clone(), e.to_string()).await {
+                            error!("failed to set query to failed: {e}");
+                        }
+                    } else {
+                        ctx.rollback_fragments(StopMode::Forceful).await;
                     }
-                    QueryStateInternal::Failed
+                    false
                 }
             }
         },
         Ok(mode) = stop_rx.recv_async() => {
-            if buggify() {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
             let _guard = span.enter();
-            info!(?mode, "Stopping query");
+            info!(?mode, "stopping query");
             drop(_guard);
-            state.rollback(ctx, mode).await;
-            ctx.persist_stopped().await;
-            QueryStateInternal::Stopped
+            if from_state == QueryState::Pending {
+                if let Err(e) = ctx.catalog.query.stop_pending_query(&ctx.query).await {
+                    error!("failed to stop query: {e}");
+                }
+                false
+            } else if mode == StopMode::Graceful && from_state == QueryState::Running {
+                ctx.stop_source_fragments().await;
+                !ctx.query.current_state.is_terminal()
+            } else {
+                ctx.rollback_fragments(mode).await;
+                false
+            }
         }
     }
 }
 
-pub(crate) struct QueryReconciler;
-
-impl QueryReconciler {
-    pub(crate) async fn run(mut ctx: QueryContext, mut stop_rx: flume::Receiver<StopMode>) {
-        let span = info_span!(
-            "query",
-            id = ctx.query.id,
-            name = %ctx.query.name,
-        );
-        {
-            let _guard = span.enter();
-            info!("Starting reconciliation");
-        }
-        let mut state = QueryStateInternal::from_current(&ctx.query, &ctx.catalog).await;
-        loop {
-            state = match state {
-                QueryStateInternal::Pending(pending) => {
-                    try_transition(pending, &mut ctx, &mut stop_rx, &span).await
-                }
-                QueryStateInternal::Planned(planned) => {
-                    try_transition(planned, &mut ctx, &mut stop_rx, &span).await
-                }
-                QueryStateInternal::Registered(registered) => {
-                    try_transition(registered, &mut ctx, &mut stop_rx, &span).await
-                }
-                QueryStateInternal::Running(running) => {
-                    try_transition(running, &mut ctx, &mut stop_rx, &span).await
-                }
-                terminal => {
-                    let _guard = span.enter();
-                    info!("Reconciliation finished: {}", QueryState::from(terminal));
-                    break;
-                }
-            };
-        }
+pub(crate) async fn run(mut ctx: QueryContext, mut stop_rx: flume::Receiver<StopMode>) {
+    let span = info_span!(
+        "query",
+        id = ctx.query.id,
+        name = %ctx.query.name,
+    );
+    {
+        let _guard = span.enter();
+        info!("starting reconciliation");
+    }
+    if ctx.query.current_state != QueryState::Pending {
+        ctx.fragments = ctx.catalog.query.get_fragments(ctx.query.id).await.unwrap();
+    }
+    while try_transition(&mut ctx, &mut stop_rx, &span).await {}
+    {
+        let _guard = span.enter();
+        info!("reconciliation finished: {}", ctx.query.current_state);
     }
 }

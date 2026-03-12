@@ -67,7 +67,7 @@ pub enum DesiredQueryState {
 
 impl From<String> for QueryState {
     fn from(s: String) -> Self {
-        QueryState::from_str(&s).expect("Failed to parse QueryState")
+        QueryState::from_str(&s).expect("failed to parse QueryState")
     }
 }
 

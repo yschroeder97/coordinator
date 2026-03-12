@@ -104,7 +104,7 @@ impl WorkerRegistryHandle {
             let workers = self
                 .shared
                 .read()
-                .expect("No one should panic while holding this lock");
+                .expect("no one should panic while holding this lock");
 
             workers
                 .get(addr)
@@ -143,14 +143,14 @@ impl WorkerRegistry {
     pub(crate) fn register(&self, addr: GrpcAddr, sender: flume::Sender<Rpc>) {
         self.shared
             .write()
-            .expect("No one should panic while holding this lock")
+            .expect("no one should panic while holding this lock")
             .insert(addr, sender);
     }
 
     pub(crate) fn unregister(&self, addr: &GrpcAddr) {
         self.shared
             .write()
-            .expect("No one should panic while holding this lock")
+            .expect("no one should panic while holding this lock")
             .remove(addr);
     }
 }

@@ -50,11 +50,27 @@ pub struct Model {
 pub enum Relation {
     #[sea_orm(has_many = "crate::source::physical_source::Entity")]
     PhysicalSource,
+    #[sea_orm(has_many = "crate::sink::Entity")]
+    Sink,
+    #[sea_orm(has_many = "crate::query::fragment::Entity")]
+    Fragment,
 }
 
 impl Related<crate::source::physical_source::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::PhysicalSource.def()
+    }
+}
+
+impl Related<crate::sink::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Sink.def()
+    }
+}
+
+impl Related<crate::query::fragment::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Fragment.def()
     }
 }
 

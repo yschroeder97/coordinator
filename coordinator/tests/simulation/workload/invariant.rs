@@ -2,23 +2,55 @@
 
 use crate::harness::TestHarness;
 use async_trait::async_trait;
+use model::query::fragment;
+use model::query::GetQuery;
+use model::worker::endpoint::GrpcAddr;
+use model::{query};
+use std::collections::{HashMap, HashSet};
 use tracing::info;
 
 pub struct InvariantContext {
-    created_query_ids: Vec<i64>,
+    live_query_ids: Vec<i64>,
     dropped_query_ids: Vec<i64>,
+    pub queries: Vec<(query::Model, Vec<fragment::Model>)>,
+    pub active_by_worker: HashMap<GrpcAddr, HashSet<u64>>,
 }
 
 impl InvariantContext {
-    pub fn new(created_query_ids: Vec<i64>, dropped_query_ids: Vec<i64>) -> Self {
+    pub async fn build(
+        harness: &TestHarness,
+        created_query_ids: Vec<i64>,
+        dropped_query_ids: Vec<i64>,
+    ) -> Self {
+        let dropped_set: HashSet<i64> = dropped_query_ids.iter().copied().collect();
+        let live_query_ids: Vec<i64> = created_query_ids
+            .into_iter()
+            .filter(|id| !dropped_set.contains(id))
+            .collect();
+
+        let all_ids: Vec<i64> = live_query_ids
+            .iter()
+            .chain(dropped_query_ids.iter())
+            .copied()
+            .collect();
+
+        let queries: Vec<(query::Model, Vec<fragment::Model>)> = harness
+            .send(GetQuery::all().with_ids(all_ids).with_fragments())
+            .await
+            .unwrap();
+
+        let active_by_worker = harness.active_fragments_by_worker().await;
+
         Self {
-            created_query_ids,
+            live_query_ids,
             dropped_query_ids,
+            queries,
+            active_by_worker,
         }
     }
 
-    pub fn query_ids(&self) -> &[i64] {
-        &self.created_query_ids
+    pub fn live_query_ids(&self) -> &[i64] {
+        &self.live_query_ids
     }
 
     pub fn dropped_query_ids(&self) -> &[i64] {
@@ -26,7 +58,12 @@ impl InvariantContext {
     }
 
     pub fn empty() -> Self {
-        Self::new(Vec::new(), Vec::new())
+        Self {
+            live_query_ids: Vec::new(),
+            dropped_query_ids: Vec::new(),
+            queries: Vec::new(),
+            active_by_worker: HashMap::new(),
+        }
     }
 }
 

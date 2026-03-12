@@ -6,6 +6,7 @@ use sea_orm::entity::prelude::*;
 use sea_orm::{Condition, Set};
 use serde::{Deserialize, Serialize};
 use strum::Display;
+#[cfg(feature = "testing")]
 use crate::worker::CreateWorker;
 
 pub type SinkName = String;
@@ -160,11 +161,28 @@ pub struct SinkWithRefs {
 }
 
 #[cfg(feature = "testing")]
+fn sink_name_chars() -> impl proptest::strategy::Strategy<Value = char> {
+    use proptest::prelude::*;
+    prop_oneof![
+        proptest::char::range('a', 'z'),
+        proptest::char::range('0', '9'),
+        Just('_')
+    ]
+}
+
+#[cfg(feature = "testing")]
 impl crate::Generate for SinkWithRefs {
     fn generate() -> proptest::strategy::BoxedStrategy<Self> {
         use proptest::prelude::*;
+        let name = (
+            proptest::char::range('a', 'z'),
+            proptest::collection::vec(sink_name_chars(), 2..=29),
+        )
+            .prop_map(|(first, rest)| {
+                std::iter::once(first).chain(rest).collect::<String>()
+            });
         (
-            proptest::string::string_regex("[a-z][a-z0-9_]{2,29}").unwrap(),
+            name,
             CreateWorker::generate(),
             any::<SinkType>(),
             any::<Schema>(),

@@ -80,7 +80,7 @@ impl WorkerClient {
     pub(crate) async fn connect(
         grpc_addr: GrpcAddr,
     ) -> Result<(flume::Sender<Rpc>, WorkerClient), WorkerClientErr> {
-        debug!("Attempting to connect");
+        debug!("attempting to connect");
 
         let endpoint = Endpoint::from_shared(format!("http://{}", grpc_addr))
             .map_err(|e| WorkerClientErr::Connection(e, grpc_addr.clone()))?
@@ -91,12 +91,12 @@ impl WorkerClient {
 
         let channel = Retry::spawn(connect_retry_strategy(), || async {
             endpoint.connect().await.map_err(|e| {
-                debug!("Retrying connection");
+                debug!("retrying connection");
                 WorkerClientErr::Connection(e, grpc_addr.clone())
             })
         })
         .await?;
-        debug!("Connected");
+        debug!("connected");
 
         let (rpc_sender, rpc_listener) = flume::bounded(64);
         Ok((
@@ -212,6 +212,6 @@ where
 {
     let res = res.map_err(|e| e.into());
     if tx.send(res).is_err() {
-        debug!("Requesting task dropped the receiver channel");
+        debug!("requesting task dropped the receiver channel");
     }
 }

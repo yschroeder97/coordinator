@@ -2,7 +2,7 @@ use crate::worker::poly_join_set::JoinSet;
 use crate::worker::worker_registry::WorkerRegistryHandle;
 use crate::query::QueryId;
 use crate::query::context::QueryContext;
-use crate::query::query_task::QueryReconciler;
+use crate::query::query_task;
 use catalog::Catalog;
 use catalog::Reconcilable;
 use model::query::*;
@@ -35,7 +35,7 @@ impl QueryController {
 
     pub async fn run(mut self) {
         let mut intent = self.catalog.query.subscribe_intent();
-        info!("Starting");
+        info!("starting");
         // Reconcile once
         self.reconcile().await;
 
@@ -45,7 +45,7 @@ impl QueryController {
                 // Query create/drop requested by the client
                 result = intent.changed() => {
                     if result.is_err() {
-                        info!("Query catalog notification channel closed, shutting down");
+                        info!("query catalog notification channel closed, shutting down");
                         return;
                     }
                 }
@@ -65,7 +65,7 @@ impl QueryController {
         let mismatches = match self.catalog.query.get_mismatch().await {
             Ok(m) => m,
             Err(e) => {
-                warn!("Failed to fetch query mismatches: {e}");
+                warn!("failed to fetch query mismatches: {e}");
                 return;
             }
         };
@@ -75,7 +75,7 @@ impl QueryController {
             match self.stop_channels.get(&mismatch.id) {
                 Some(stop_channel) => match mismatch.desired_state {
                     query_state::DesiredQueryState::Completed => {
-                        debug!(query_id = mismatch.id, "Reconciliation already running, skipping");
+                        debug!(query_id = mismatch.id, "reconciliation already running, skipping");
                     }
                     query_state::DesiredQueryState::Stopped => {
                         self.send_stop_signal(&mismatch, stop_channel);
@@ -94,12 +94,13 @@ impl QueryController {
 
         let ctx = QueryContext {
             query: mismatch,
+            fragments: Vec::new(),
             catalog: self.catalog.clone(),
             worker_registry: self.worker_registry.clone(),
         };
 
         self.reconcilers.spawn(async move {
-            supervised(QueryReconciler::run(ctx, stop_rx)).await;
+            supervised(query_task::run(ctx, stop_rx)).await;
             query_id
         });
         self.stop_channels.insert(query_id, stop_tx);
@@ -114,7 +115,7 @@ impl QueryController {
                 self.cleanup();
             }
             Err(e) => {
-                error!("Reconciler task failed: {e:?}");
+                error!("reconciler task failed: {e:?}");
                 self.cleanup();
             }
         }
@@ -124,7 +125,7 @@ impl QueryController {
         self.stop_channels.retain(|id, sender| {
             let alive = !sender.is_disconnected();
             if !alive {
-                error!(query_id = id, "Reconciler panicked");
+                error!(query_id = id, "reconciler panicked");
             }
             alive
         });
@@ -139,12 +140,12 @@ impl QueryController {
     ) {
         let mode = query_to_stop
             .stop_mode
-            .expect("If desired_state == 'Stopped', the stop mode must be set");
+            .expect("if desired_state == 'Stopped', the stop mode must be set");
         match stop_channel.try_send(mode) {
-            Ok(_) => debug!(query_id = query_to_stop.id, ?mode, "Sent stop signal"),
+            Ok(_) => debug!(query_id = query_to_stop.id, ?mode, "sent stop signal"),
             Err(flume::TrySendError::Full(_)) => {}
             Err(flume::TrySendError::Disconnected(_)) => {
-                debug!(query_id = query_to_stop.id, "Reconciliation task already finished")
+                debug!(query_id = query_to_stop.id, "reconciliation task already finished")
             }
         }
     }

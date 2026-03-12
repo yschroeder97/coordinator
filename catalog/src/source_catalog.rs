@@ -108,7 +108,7 @@ mod tests {
             .source
             .create_logical_source(create_source.clone())
             .await
-            .expect("Logical source creation should succeed");
+            .expect("logical source creation should succeed");
 
         assert_eq!(model.name, create_source.name);
         assert_eq!(model.schema, create_source.schema);
@@ -119,9 +119,9 @@ mod tests {
                 with_name: create_source.name.clone(),
             })
             .await
-            .expect("Get should not fail");
+            .expect("get should not fail");
 
-        let fetched = fetched.expect("Get request should return a value");
+        let fetched = fetched.expect("get request should return a value");
         assert_eq!(fetched.name, create_source.name);
         assert_eq!(fetched.schema, create_source.schema);
     }
@@ -149,17 +149,17 @@ mod tests {
             .source
             .create_logical_source(req.logical.clone())
             .await
-            .expect("Logical source creation should succeed");
+            .expect("logical source creation should succeed");
         catalog
             .worker
             .create_worker(req.worker.clone())
             .await
-            .expect("Worker creation should succeed");
+            .expect("worker creation should succeed");
         catalog
             .source
             .create_physical_source(req.physical.clone())
             .await
-            .expect("Physical source creation should succeed");
+            .expect("physical source creation should succeed");
 
         let rsp = catalog
             .source
@@ -181,7 +181,7 @@ mod tests {
             .source
             .create_logical_source(create_source.clone())
             .await
-            .expect("First logical source creation should succeed");
+            .expect("first logical source creation should succeed");
 
         assert_eq!(model.name, create_source.name);
         assert_eq!(model.schema, create_source.schema);
@@ -212,7 +212,7 @@ mod tests {
             .source
             .create_logical_source(req.logical)
             .await
-            .expect("Logical source creation should succeed");
+            .expect("logical source creation should succeed");
 
         assert!(
             catalog
@@ -227,13 +227,13 @@ mod tests {
             .worker
             .create_worker(req.worker)
             .await
-            .expect("Worker creation should succeed");
+            .expect("worker creation should succeed");
 
         catalog
             .source
             .create_physical_source(req.physical)
             .await
-            .expect("Physical source with valid refs should succeed");
+            .expect("physical source with valid refs should succeed");
     }
 
     async fn prop_drop_with_refs_fails(req: PhysicalSourceWithRefs) {
@@ -242,17 +242,17 @@ mod tests {
             .source
             .create_logical_source(req.logical.clone())
             .await
-            .expect("Logical source creation should succeed");
+            .expect("logical source creation should succeed");
         catalog
             .worker
             .create_worker(req.worker)
             .await
-            .expect("Worker creation should succeed");
+            .expect("worker creation should succeed");
         catalog
             .source
             .create_physical_source(req.physical)
             .await
-            .expect("Physical source creation should succeed");
+            .expect("physical source creation should succeed");
 
         let drop_request = DropLogicalSource {
             with_name: req.logical.name.clone(),
@@ -420,7 +420,7 @@ mod tests {
             .source
             .create_physical_source(req.physical)
             .await
-            .expect("Second creation after drop should succeed");
+            .expect("second creation after drop should succeed");
     }
 
     async fn prop_create_drop_create_logical(create_source: CreateLogicalSource) {
@@ -429,7 +429,7 @@ mod tests {
             .source
             .create_logical_source(create_source.clone())
             .await
-            .expect("First create should succeed");
+            .expect("first create should succeed");
 
         let drop_request = DropLogicalSource {
             with_name: create_source.name.clone(),
@@ -439,13 +439,13 @@ mod tests {
             .source
             .drop_logical_source(drop_request)
             .await
-            .expect("Drop should succeed");
+            .expect("drop should succeed");
 
         catalog
             .source
             .create_logical_source(create_source)
             .await
-            .expect("Second create after drop should succeed");
+            .expect("second create after drop should succeed");
     }
 
     proptest! {

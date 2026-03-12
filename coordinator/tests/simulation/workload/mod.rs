@@ -40,6 +40,21 @@ pub fn precompute_delays(num_ops: usize, duration: Duration) -> Vec<Duration> {
         .collect()
 }
 
+pub fn precompute_times(count: usize, start: Duration, span: Duration) -> Vec<Duration> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let start_ms = start.as_millis() as u64;
+    let slot_ms = span.as_millis() as u64 / count as u64;
+    let mut rng = madsim::rand::thread_rng();
+    (0..count)
+        .map(|i| {
+            let slot_start = start_ms + (i as u64) * slot_ms;
+            Duration::from_millis(rng.gen_range(slot_start..=slot_start + slot_ms))
+        })
+        .collect()
+}
+
 pub async fn run_ops<'a, F>(num_ops: usize, duration: Duration, name: &str, mut step: F)
 where
     F: FnMut(usize) -> Pin<Box<dyn std::future::Future<Output = ()> + 'a>>,

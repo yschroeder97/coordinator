@@ -9,12 +9,12 @@ use madsim::net::NetSim;
 use madsim::runtime::{Handle, NodeHandle};
 use model::{query, worker};
 use model::query::GetQuery;
-use model::query::query_state::QueryState;
+use model::query::query_state::{DesiredQueryState, QueryState};
 use model::worker::endpoint::{GrpcAddr, NetworkAddr};
 use model::worker::{CreateWorker, DesiredWorkerState, GetWorker, WorkerState};
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +22,6 @@ use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tonic::transport::{Endpoint, Server};
 use tracing::{debug, info};
-use worker_rpc_service::WorkerStatusResponse;
 use worker_rpc_service::worker_rpc_service_client::WorkerRpcServiceClient;
 
 const COORDINATOR_NAME: &str = "coordinator";
@@ -281,8 +280,11 @@ impl TestHarness {
                 .await
                 .unwrap();
 
-            let queries_converged = results.iter().all(|(q, _)| {
-                q.current_state == QueryState::Running || q.current_state.is_terminal()
+            let queries_converged = results.iter().all(|(q, _)| match q.desired_state {
+                DesiredQueryState::Completed => {
+                    q.current_state == QueryState::Running || q.current_state.is_terminal()
+                }
+                DesiredQueryState::Stopped => q.current_state.is_terminal(),
             });
 
             let workers: Vec<worker::Model> = self.send(GetWorker::all()).await.unwrap();
@@ -300,8 +302,13 @@ impl TestHarness {
                 "waiting for convergence: queries={:?}, workers={:?}",
                 results
                     .iter()
-                    .filter(|(q, _)| q.current_state != QueryState::Running && !q.current_state.is_terminal())
-                    .map(|(q, _)| (q.id, q.current_state))
+                    .filter(|(q, _)| match q.desired_state {
+                        DesiredQueryState::Completed => {
+                            q.current_state != QueryState::Running && !q.current_state.is_terminal()
+                        }
+                        DesiredQueryState::Stopped => !q.current_state.is_terminal(),
+                    })
+                    .map(|(q, _)| (q.id, q.current_state, q.desired_state))
                     .collect::<Vec<_>>(),
                 workers
                     .iter()
@@ -313,10 +320,10 @@ impl TestHarness {
         }
     }
 
-    pub async fn query_worker_statuses(&self) -> HashMap<GrpcAddr, WorkerStatusResponse> {
+    pub async fn active_fragments_by_worker(&self) -> HashMap<GrpcAddr, HashSet<u64>> {
         let workers: Vec<worker::Model> = self.send(GetWorker::all()).await.unwrap();
 
-        let (result_tx, result_rx) = flume::bounded(1);
+        let (tx, rx) = flume::bounded(1);
         let addrs: Vec<GrpcAddr> = workers
             .into_iter()
             .filter(|w| w.current_state == WorkerState::Active)
@@ -324,41 +331,41 @@ impl TestHarness {
             .collect();
 
         self.coordinator_node.spawn(async move {
-            let mut statuses = HashMap::new();
-            for grpc_addr in &addrs {
-                let addr = format!("http://{}", grpc_addr);
-                let endpoint = match Endpoint::from_shared(addr) {
+            let mut result = HashMap::new();
+            for addr in &addrs {
+                let endpoint = match Endpoint::from_shared(format!("http://{}", addr)) {
                     Ok(e) => e,
                     Err(_) => continue,
                 };
                 let channel = match endpoint.connect().await {
                     Ok(c) => c,
                     Err(e) => {
-                        info!("failed to connect to worker {grpc_addr}: {e}");
+                        info!("failed to connect to worker {addr}: {e}");
                         continue;
                     }
                 };
                 let mut client = WorkerRpcServiceClient::new(channel);
-                let request = tonic::Request::new(
-                    worker_rpc_service::WorkerStatusRequest {
-                        after_unix_timestamp_in_ms: 0,
-                    },
-                );
-                match client.request_status(request).await {
+                let req = tonic::Request::new(worker_rpc_service::WorkerStatusRequest {
+                    after_unix_timestamp_in_ms: 0,
+                });
+                match client.request_status(req).await {
                     Ok(resp) => {
-                        statuses.insert(grpc_addr.clone(), resp.into_inner());
+                        let ids: HashSet<u64> = resp
+                            .into_inner()
+                            .active_queries
+                            .iter()
+                            .map(|aq| aq.query_id)
+                            .collect();
+                        result.insert(addr.clone(), ids);
                     }
                     Err(e) => {
-                        info!("failed to get status from worker {grpc_addr}: {e}");
+                        info!("failed to get status from worker {addr}: {e}");
                     }
                 }
             }
-            let _ = result_tx.send_async(statuses).await;
+            let _ = tx.send_async(result).await;
         });
 
-        result_rx
-            .recv_async()
-            .await
-            .unwrap_or_default()
+        rx.recv_async().await.unwrap_or_default()
     }
 }

@@ -1,5 +1,5 @@
 [[test]]
-title = "heavy_churn"
+title = "all"
 timeout = 600
 convergence_timeout = 120
 
@@ -14,8 +14,11 @@ convergence_timeout = 120
 
   [[test.workload]]
   test_name = "Query"
-  num_ops = 25
-  test_duration = 60.0
+  num_queries = 25
+  create_duration = 60.0
+  drop_fraction = 0.5
+  drop_start = 10.0
+  drop_duration = 50.0
 
   [[test.workload]]
   test_name = "Attrition"

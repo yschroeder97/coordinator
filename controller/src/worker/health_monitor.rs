@@ -42,7 +42,7 @@ impl HealthMonitor {
     #[instrument(skip(self))]
     pub async fn run(mut self) {
         let mut state_rx = self.catalog.subscribe_state();
-        info!("Starting");
+        info!("starting");
         self.synchronize().await;
 
         loop {
@@ -50,7 +50,7 @@ impl HealthMonitor {
                 result = state_rx.changed() => match result {
                     Ok(()) => self.synchronize().await,
                     Err(_) => {
-                        info!("Worker catalog notification channel closed, shutting down");
+                        info!("worker catalog notification channel closed, shutting down");
                         return;
                     }
                 },
@@ -58,7 +58,7 @@ impl HealthMonitor {
                     match result {
                         Ok(addr) => { self.handles.remove(&addr); }
                         Err(e) if e.is_cancelled() => {}
-                        Err(e) => { warn!("Health check task failed: {e:?}"); }
+                        Err(e) => { warn!("health check task failed: {e:?}"); }
                     }
                 }
             }
@@ -143,7 +143,7 @@ impl HealthMonitor {
 
     async fn mark_unreachable(catalog: &WorkerCatalog, worker: worker::Model) {
         let addr = &worker.grpc_addr;
-        debug!(%addr, "Marking worker unreachable");
+        debug!(%addr, "marking worker unreachable");
         catalog
             .set_worker_state(worker.into(), WorkerState::Unreachable)
             .await

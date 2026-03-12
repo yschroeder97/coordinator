@@ -71,17 +71,24 @@ pub async fn walk_query_via_fragments(
             QueryState::Completed => {
                 advance_all_fragments(catalog, current.id, FragmentState::Completed).await
             }
-            QueryState::Stopped => catalog
-                .query
-                .stop_query(current)
-                .await
-                .expect("stop_query should succeed"),
+            QueryState::Stopped => {
+                let frags = catalog.query.get_fragments(current.id).await.unwrap();
+                if frags.is_empty() {
+                    catalog
+                        .query
+                        .stop_pending_query(current)
+                        .await
+                        .expect("stop_query should succeed")
+                } else {
+                    advance_all_fragments(catalog, current.id, FragmentState::Stopped).await
+                }
+            }
             QueryState::Failed => {
                 let frags = catalog.query.get_fragments(current.id).await.unwrap();
                 if frags.is_empty() {
                     catalog
                         .query
-                        .fail_query(current.clone(), "test failure".to_string())
+                        .fail_pending_query(current.clone(), "test failure".to_string())
                         .await
                         .expect("fail_query should succeed")
                 } else {
@@ -136,14 +143,19 @@ pub async fn advance_query_to(catalog: &Arc<Catalog>, query_id: i64, target: Que
             advance_all_fragments(catalog, query_id, FragmentState::Completed).await;
         }
         QueryState::Stopped => {
-            catalog.query.stop_query(&query).await.unwrap();
+            let frags = catalog.query.get_fragments(query_id).await.unwrap();
+            if frags.is_empty() {
+                catalog.query.stop_pending_query(&query).await.unwrap();
+            } else {
+                advance_all_fragments(catalog, query_id, FragmentState::Stopped).await;
+            }
         }
         QueryState::Failed => {
             let frags = catalog.query.get_fragments(query_id).await.unwrap();
             if frags.is_empty() {
                 catalog
                     .query
-                    .fail_query(query, "test failure".to_string())
+                    .fail_pending_query(query, "test failure".to_string())
                     .await
                     .unwrap();
             } else {

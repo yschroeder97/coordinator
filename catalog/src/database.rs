@@ -8,6 +8,10 @@ use tokio_retry::RetryIf;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::warn;
 
+const SQLITE_MAX_CONNECTIONS: u32 = 8;
+const RETRY_BASE_MS: u64 = 50;
+const MAX_RETRIES: usize = 5;
+
 #[derive(Default)]
 pub enum StateBackend {
     #[default]
@@ -46,10 +50,6 @@ impl Database {
                     .connect_timeout(MAX_DURATION)
                     .idle_timeout(MAX_DURATION)
                     .max_lifetime(MAX_DURATION)
-                    // When enabled (the default), sqlx pings the connection on every acquire.
-                    // If a tokio::select! cancels the caller mid-ping, the connection is dropped,
-                    // which destroys the in-memory database. Disabling the ping makes acquire
-                    // cancellation-safe. See: https://docs.rs/sqlx/latest/sqlx/struct.Pool.html
                     .test_before_acquire(false)
                     .sqlx_logging(false);
                 let conn = sea_orm::Database::connect(opts).await?;
@@ -58,11 +58,15 @@ impl Database {
             StateBackend::Sqlite { endpoint: _, opts } => {
                 let mut opts = opts;
                 opts.min_connections(1)
-                    .max_connections(1)
+                    .max_connections(SQLITE_MAX_CONNECTIONS)
                     .acquire_timeout(MAX_DURATION)
                     .connect_timeout(MAX_DURATION)
                     .idle_timeout(MAX_DURATION)
                     .max_lifetime(MAX_DURATION)
+                    // When enabled (the default), sqlx pings the connection on every acquire.
+                    // If a tokio::select! cancels the caller mid-ping, the connection is dropped,
+                    // which destroys the in-memory database. Disabling the ping makes acquire
+                    // cancellation-safe. See: https://docs.rs/sqlx/latest/sqlx/struct.Pool.html
                     .test_before_acquire(false)
                     .sqlx_logging(false);
                 let conn = sea_orm::Database::connect(opts).await?;
@@ -89,11 +93,11 @@ impl Database {
         Fut: Future<Output = Result<T, DbErr>>,
     {
         RetryIf::spawn(
-            ExponentialBackoff::from_millis(50).map(jitter).take(5),
+            ExponentialBackoff::from_millis(RETRY_BASE_MS).map(jitter).take(MAX_RETRIES),
             || op(self.conn.clone()),
             |err: &DbErr| {
                 if err.retryable() {
-                    warn!("Transient database error, retrying: {err}");
+                    warn!("transient database error, retrying: {err}");
                     return true;
                 }
                 false

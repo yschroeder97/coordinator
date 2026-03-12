@@ -25,13 +25,33 @@ pub enum DataType {
 pub type FieldName = String;
 pub type AttributeField = (FieldName, DataType);
 
+#[cfg(feature = "testing")]
+fn field_name_chars() -> impl proptest::strategy::Strategy<Value = char> {
+    use proptest::prelude::*;
+    prop_oneof![
+        proptest::char::range('a', 'z'),
+        proptest::char::range('0', '9'),
+        Just('_')
+    ]
+}
+
+#[cfg(feature = "testing")]
+fn field_name_strategy() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::prelude::*;
+    (
+        proptest::char::range('a', 'z'),
+        proptest::collection::vec(field_name_chars(), 0..=19),
+    )
+        .prop_map(|(first, rest)| std::iter::once(first).chain(rest).collect::<String>())
+}
+
 #[cfg_attr(feature = "testing", derive(Arbitrary))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
 pub struct Schema {
     #[cfg_attr(
         feature = "testing",
         proptest(strategy = "proptest::collection::vec(\
-            (proptest::string::string_regex(\"[a-z][a-z0-9_]{0,19}\").unwrap(), proptest::prelude::any::<DataType>()),\
+            (field_name_strategy(), proptest::prelude::any::<DataType>()),\
             1..10)")
     )]
     fields: Vec<AttributeField>,

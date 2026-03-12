@@ -1,4 +1,3 @@
-use http::Uri;
 use std::fmt;
 use std::str::FromStr;
 
@@ -28,13 +27,13 @@ impl NetworkAddr {
         Self { host, port }
     }
 
-    pub fn to_uri(&self, scheme: &str) -> Uri {
-        Uri::builder()
+    pub fn to_uri(&self, scheme: &str) -> http::Uri {
+        http::Uri::builder()
             .scheme(scheme)
             .authority(format!("{}:{}", self.host, self.port))
             .path_and_query("/")
             .build()
-            .expect("Invalid NetworkAddr components")
+            .expect("invalid NetworkAddr components")
     }
 }
 
@@ -89,25 +88,38 @@ impl FromStr for NetworkAddr {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let format_s = if s.contains("://") {
-            s.to_string()
-        } else {
-            format!("http://{}", s)
-        };
-        let uri = format_s.parse::<Uri>().map_err(|e| e.to_string())?;
-
-        let authority = uri.authority().ok_or("Missing host/port")?;
-        let host = authority.host().to_string();
-        let port = authority.port_u16().ok_or("Missing port")?;
-
-        Ok(NetworkAddr { host, port })
+        let s = s
+            .strip_prefix("http://")
+            .or_else(|| s.strip_prefix("https://"))
+            .unwrap_or(s);
+        let colon = s.rfind(':').ok_or("Missing port separator")?;
+        let host = &s[..colon];
+        let port: u16 = s[colon + 1..]
+            .parse()
+            .map_err(|e: std::num::ParseIntError| e.to_string())?;
+        if host.is_empty() {
+            return Err("Hostname cannot be empty".to_string());
+        }
+        if port == 0 {
+            return Err("Port cannot be 0".to_string());
+        }
+        Ok(NetworkAddr {
+            host: host.to_string(),
+            port,
+        })
     }
 }
 
 impl<'a> From<&'a str> for NetworkAddr {
     fn from(s: &'a str) -> Self {
-        NetworkAddr::from_str(s).expect("Invalid NetworkAddr string")
+        NetworkAddr::from_str(s).expect("invalid NetworkAddr string")
     }
+}
+
+#[cfg(feature = "testing")]
+fn hostname_chars() -> impl proptest::strategy::Strategy<Value = char> {
+    use proptest::prelude::*;
+    prop_oneof![proptest::char::range('a', 'z'), proptest::char::range('0', '9')]
 }
 
 #[cfg(feature = "testing")]
@@ -119,7 +131,8 @@ impl crate::Generate for NetworkAddr {
             Just("127.0.0.1".to_string()),
             (0..255u8, 0..255u8, 0..255u8, 0..255u8)
                 .prop_map(|(a, b, c, d)| format!("{}.{}.{}.{}", a, b, c, d)),
-            proptest::string::string_regex("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?").unwrap()
+            proptest::collection::vec(hostname_chars(), 1..=10)
+                .prop_map(|chars| chars.into_iter().collect::<String>())
         ];
         (host_name, 1024..65535u16)
             .prop_map(|(host, port)| NetworkAddr::new(host, port))

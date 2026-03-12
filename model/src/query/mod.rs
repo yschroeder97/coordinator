@@ -219,9 +219,25 @@ impl IntoCondition for GetQuery {
 impl crate::Generate for CreateQuery {
     fn generate() -> proptest::strategy::BoxedStrategy<Self> {
         use proptest::prelude::*;
+        let name = (
+            proptest::char::range('a', 'z'),
+            proptest::collection::vec(proptest::char::range('a', 'z'), 2..=10),
+        )
+            .prop_map(|(first, rest)| std::iter::once(first).chain(rest).collect::<String>());
+        let statement = (
+            proptest::collection::vec(proptest::char::range('a', 'z'), 1..=10),
+            proptest::collection::vec(proptest::char::range('a', 'z'), 1..=10),
+        )
+            .prop_map(|(col, table)| {
+                format!(
+                    "SELECT {} FROM {}",
+                    col.into_iter().collect::<String>(),
+                    table.into_iter().collect::<String>()
+                )
+            });
         (
-            proptest::string::string_regex("[a-z][a-z0-9_-]{2,29}").unwrap(),
-            proptest::string::string_regex("SELECT [a-z]+ FROM [a-z]+").unwrap(),
+            name,
+            statement,
             prop_oneof![
                 Just(QueryState::Pending),
                 Just(QueryState::Planned),
@@ -231,7 +247,9 @@ impl crate::Generate for CreateQuery {
             ],
         )
             .prop_map(|(name, statement, block_until)| {
-                CreateQuery::new(statement).name(name).block_until(block_until)
+                CreateQuery::new(statement)
+                    .name(name)
+                    .block_until(block_until)
             })
             .boxed()
     }

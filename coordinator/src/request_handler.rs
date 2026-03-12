@@ -12,7 +12,7 @@ use tracing::{debug, info, instrument};
 
 macro_rules! dispatch {
     ($self:ident, $req:expr, $field:ident . $method:ident) => {{
-        debug!("Received: {:?}", $req);
+        debug!("received: {:?}", $req);
         let Request { payload, reply_to } = $req;
         let _ = reply_to.send($self.catalog.$field.$method(payload).await);
     }};
@@ -20,7 +20,7 @@ macro_rules! dispatch {
 
 macro_rules! dispatch_blocking {
     ($self:ident, $req:expr, $field:ident . $method:ident, |$result:ident, $request:ident| $store:expr) => {{
-        debug!("Received: {:?}", $req);
+        debug!("received: {:?}", $req);
         let Request { payload, reply_to } = $req;
         match $self.catalog.$field.$method(payload.clone()).await {
             Ok($result) => {
@@ -80,7 +80,7 @@ impl RequestHandler {
                 recv_result = self.receiver.recv_async() => match recv_result {
                     Ok(req) => self.handle_recv(req).await,
                     Err(_) => {
-                        info!("All clients have been dropped, shutting down...");
+                        info!("all clients have been dropped, shutting down...");
                         return;
                     }
                 },
@@ -288,7 +288,7 @@ mod tests {
             self.sender
                 .send_async(request.into())
                 .await
-                .expect("Handler should be running");
+                .expect("handler should be running");
             rx
         }
 

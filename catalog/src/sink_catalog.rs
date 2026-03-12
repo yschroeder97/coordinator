@@ -55,13 +55,13 @@ mod tests {
             .worker
             .create_worker(req.worker)
             .await
-            .expect("Worker creation should succeed");
+            .expect("worker creation should succeed");
 
         let created = catalog
             .sink
             .create_sink(req.sink.clone())
             .await
-            .expect("Sink creation should succeed");
+            .expect("sink creation should succeed");
 
         assert_eq!(created.name, req.sink.name);
         assert_eq!(created.sink_type, req.sink.sink_type);
@@ -70,7 +70,7 @@ mod tests {
             .sink
             .get_sink(GetSink::all().by_name(req.sink.name.clone()))
             .await
-            .expect("Get sink should succeed");
+            .expect("get sink should succeed");
 
         assert_eq!(sinks.len(), 1);
         assert_eq!(sinks[0].name, req.sink.name);
@@ -87,7 +87,7 @@ mod tests {
             .sink
             .drop_sink(DropSink::all().with_name(req.sink.name.clone()))
             .await
-            .expect("Drop should succeed");
+            .expect("drop should succeed");
 
         assert_eq!(dropped.len(), 1);
         assert_eq!(dropped[0].name, req.sink.name);
@@ -107,13 +107,13 @@ mod tests {
             .worker
             .create_worker(req.worker)
             .await
-            .expect("Worker creation should succeed");
+            .expect("worker creation should succeed");
 
         catalog
             .sink
             .create_sink(req.sink.clone())
             .await
-            .expect("First sink creation should succeed");
+            .expect("first sink creation should succeed");
 
         assert!(
             catalog.sink.create_sink(req.sink.clone()).await.is_err(),
@@ -134,13 +134,13 @@ mod tests {
             .worker
             .create_worker(req.worker)
             .await
-            .expect("Worker creation should succeed");
+            .expect("worker creation should succeed");
 
         catalog
             .sink
             .create_sink(req.sink)
             .await
-            .expect("Sink creation with valid worker ref should succeed");
+            .expect("sink creation with valid worker ref should succeed");
     }
 
     async fn prop_create_drop_create_sink(req: SinkWithRefs) {
@@ -150,26 +150,26 @@ mod tests {
             .worker
             .create_worker(req.worker)
             .await
-            .expect("Worker creation should succeed");
+            .expect("worker creation should succeed");
 
         catalog
             .sink
             .create_sink(req.sink.clone())
             .await
-            .expect("First sink creation should succeed");
+            .expect("first sink creation should succeed");
 
         let drop_req = DropSink::all().with_name(req.sink.name.clone());
         catalog
             .sink
             .drop_sink(drop_req)
             .await
-            .expect("Drop should succeed");
+            .expect("drop should succeed");
 
         catalog
             .sink
             .create_sink(req.sink)
             .await
-            .expect("Second creation after drop should succeed");
+            .expect("second creation after drop should succeed");
     }
 
     proptest! {

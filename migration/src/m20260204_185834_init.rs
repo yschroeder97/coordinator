@@ -285,6 +285,53 @@ impl MigrationTrait for Migration {
                             .on_delete(ForeignKeyAction::Cascade)
                             .on_update(ForeignKeyAction::Restrict),
                     )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(Fragment::Table, Fragment::HostAddr)
+                            .to(Worker::Table, Worker::HostAddr)
+                            .on_delete(ForeignKeyAction::Restrict)
+                            .on_update(ForeignKeyAction::Restrict),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                MigrationIndex::create()
+                    .table(Fragment::Table)
+                    .name("idx_fragment_query_id")
+                    .col(Fragment::QueryId)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                MigrationIndex::create()
+                    .table(PhysicalSource::Table)
+                    .name("idx_physical_source_host_addr")
+                    .col(PhysicalSource::HostAddr)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                MigrationIndex::create()
+                    .table(PhysicalSource::Table)
+                    .name("idx_physical_source_logical_source")
+                    .col(PhysicalSource::LogicalSource)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                MigrationIndex::create()
+                    .table(Sink::Table)
+                    .name("idx_sink_host_addr")
+                    .col(Sink::HostAddr)
                     .to_owned(),
             )
             .await?;

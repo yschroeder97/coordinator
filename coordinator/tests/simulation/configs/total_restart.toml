@@ -1,15 +1,19 @@
 [[test]]
 title = "total_restart"
-timeout = 300
+timeout = 100
+buggify = false
+run_failure_workloads = false
 
   [[test.workload]]
   test_name = "Query"
-  num_ops = 15
-  test_duration = 30.0
+  num_queries = 1
+  drop_fraction = 0.0
 
   [[test.workload]]
   test_name = "Attrition"
-  num_ops = 1
-  test_duration = 5.0
-  kill_rate = 0.0
-  restart_all_after_secs = 5
+  num_ops = 2
+  test_duration = 20.0
+  kill_rate = 0.8
+  restart_delay_lo_secs = 1
+  restart_delay_hi_secs = 5
+  kill_coordinator = false

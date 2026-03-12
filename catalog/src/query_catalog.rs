@@ -2,7 +2,9 @@ use crate::database::Database;
 use crate::notification::{NotificationChannel, Reconcilable};
 use anyhow::Result;
 use madsim::buggify::buggify;
-use model::query::fragment::{CreateFragment, FragmentState};
+use model::query::fragment::CreateFragment;
+#[cfg(test)]
+use model::query::fragment::FragmentState;
 use model::query::query_state::{DesiredQueryState, QueryState};
 use model::query::{CreateQuery, DropQuery, GetQuery, fragment};
 use model::{IntoCondition, query};
@@ -172,7 +174,27 @@ impl QueryCatalog {
         Ok(fragments)
     }
 
-    pub async fn fail_query(&self, query: query::Model, error: String) -> Result<query::Model> {
+    pub async fn stop_pending_query(&self, query: &query::Model) -> Result<query::Model> {
+        let updated = self
+            .db
+            .with_retry(|conn| {
+                let query = query.clone();
+                async move {
+                    let mut am: query::ActiveModel = query.into();
+                    am.current_state = Set(QueryState::Stopped);
+                    am.update(&conn).await
+                }
+            })
+            .await?;
+        self.listeners.notify_state();
+        Ok(updated)
+    }
+
+    pub async fn fail_pending_query(
+        &self,
+        query: query::Model,
+        error: String,
+    ) -> Result<query::Model> {
         let updated = self
             .db
             .with_retry(|conn| {
@@ -258,54 +280,6 @@ impl QueryCatalog {
         self.listeners.notify_state();
         Ok(updated)
     }
-
-    pub async fn stop_query(&self, query: &query::Model) -> Result<query::Model> {
-        let result = self
-            .db
-            .with_retry(|conn| {
-                let query = query.clone();
-                async move {
-                    conn.transaction::<_, query::Model, sea_orm::DbErr>(|txn| {
-                        Box::pin(async move {
-                            let fragments = fragment::Entity::find()
-                                .filter(fragment::Column::QueryId.eq(query.id))
-                                .all(txn)
-                                .await?;
-
-                            if fragments.is_empty() {
-                                let mut am: query::ActiveModel = query.into();
-                                am.current_state = Set(QueryState::Stopped);
-                                am.update(txn).await
-                            } else {
-                                for f in fragments {
-                                    if !f.current_state.is_terminal() {
-                                        let mut am: fragment::ActiveModel = f.into();
-                                        am.current_state = Set(FragmentState::Stopped);
-                                        am.update(txn).await?;
-                                    }
-                                }
-                                query::Entity::find_by_id(query.id).one(txn).await?.ok_or(
-                                    sea_orm::DbErr::RecordNotFound(format!(
-                                        "Query {} not found",
-                                        query.id
-                                    )),
-                                )
-                            }
-                        })
-                    })
-                    .await
-                    .map_err(|e| match e {
-                        sea_orm::TransactionError::Connection(e)
-                        | sea_orm::TransactionError::Transaction(e) => e,
-                    })
-                }
-            })
-            .await?;
-        if !buggify() {
-            self.listeners.notify_state();
-        }
-        Ok(result)
-    }
 }
 
 impl Reconcilable for QueryCatalog {
@@ -325,7 +299,9 @@ impl Reconcilable for QueryCatalog {
             .with_retry(|conn| async move {
                 query::Entity::find()
                     .filter(Expr::cust("current_state <> desired_state"))
-                    .filter(Expr::cust("current_state NOT IN ('Completed', 'Stopped', 'Failed')"))
+                    .filter(Expr::cust(
+                        "current_state NOT IN ('Completed', 'Stopped', 'Failed')",
+                    ))
                     .all(&conn)
                     .await
             })
@@ -382,11 +358,11 @@ mod tests {
     use super::*;
     use crate::Catalog;
     use crate::testing::{test_prop, walk_query_via_fragments};
+    use model::Generate;
     use model::query::StopMode;
+    use model::query::fragment::ValidFragments;
     use model::query::fragment::{FragmentError, FragmentId, FragmentState};
     use model::query::query_state::QueryState;
-    use model::Generate;
-    use model::query::fragment::ValidFragments;
     use model::worker::{CreateWorker, GetWorker};
     use proptest::prelude::*;
     use sea_orm::sqlx::types::chrono;
@@ -430,7 +406,7 @@ mod tests {
             .query
             .update_fragment_states(query.id, vec![])
             .await
-            .expect("Empty update should succeed as no-op");
+            .expect("empty update should succeed as no-op");
         assert_eq!(returned, query);
         assert!(fragments.is_empty());
     }
@@ -517,7 +493,7 @@ mod tests {
                 ],
             )
             .await
-            .expect("Fragments exactly exhausting capacity should succeed");
+            .expect("fragments exactly exhausting capacity should succeed");
 
         let workers = catalog
             .worker
@@ -547,13 +523,10 @@ mod tests {
                 }],
             )
             .await
-            .expect("Fragment with zero capacity on zero-capacity worker should succeed");
+            .expect("fragment with zero capacity on zero-capacity worker should succeed");
     }
 
-    async fn prop_fragment_creation_reserves_capacity(
-        req: CreateQuery,
-        setup: ValidFragments,
-    ) {
+    async fn prop_fragment_creation_reserves_capacity(req: CreateQuery, setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -739,10 +712,7 @@ mod tests {
         assert_eq!(refetched[0], *current);
     }
 
-    async fn prop_fragments_stored_with_correct_defaults(
-        req: CreateQuery,
-        setup: ValidFragments,
-    ) {
+    async fn prop_fragments_stored_with_correct_defaults(req: CreateQuery, setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -754,7 +724,7 @@ mod tests {
             .query
             .create_fragments(&created_query, fragment_reqs.clone())
             .await
-            .expect("Fragment creation with valid refs should succeed");
+            .expect("fragment creation with valid refs should succeed");
 
         assert_eq!(created.len(), fragment_reqs.len());
 
@@ -807,10 +777,7 @@ mod tests {
         );
     }
 
-    async fn prop_fragments_reject_missing_worker(
-        req: CreateQuery,
-        setup: ValidFragments,
-    ) {
+    async fn prop_fragments_reject_missing_worker(req: CreateQuery, setup: ValidFragments) {
         let catalog = Catalog::for_test().await.query.clone();
         let created_query = catalog.create_query(req).await.unwrap();
         let fragment_reqs = setup.create_fragments(created_query.id);
@@ -977,10 +944,7 @@ mod tests {
         }
     }
 
-    async fn prop_get_mismatch_query_correctness(
-        queries: Vec<CreateQuery>,
-        setup: ValidFragments,
-    ) {
+    async fn prop_get_mismatch_query_correctness(queries: Vec<CreateQuery>, setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -1029,10 +993,7 @@ mod tests {
         }
     }
 
-    async fn prop_create_fragments_transitions_to_planned(
-        req: CreateQuery,
-        setup: ValidFragments,
-    ) {
+    async fn prop_create_fragments_transitions_to_planned(req: CreateQuery, setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -1058,10 +1019,7 @@ mod tests {
         assert_eq!(refetched[0], updated_query);
     }
 
-    async fn prop_fragment_state_derives_query_state(
-        req: CreateQuery,
-        setup: ValidFragments,
-    ) {
+    async fn prop_fragment_state_derives_query_state(req: CreateQuery, setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -1125,10 +1083,7 @@ mod tests {
         check_derived(&catalog, QueryState::Completed).await;
     }
 
-    async fn prop_one_failed_fragment_fails_query(
-        req: CreateQuery,
-        setup: ValidFragments,
-    ) {
+    async fn prop_one_failed_fragment_fails_query(req: CreateQuery, setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -1167,8 +1122,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(query.current_state, QueryState::Failed);
-        let error = query.error.expect("Query should have aggregated error");
-        let error_map = error.as_object().expect("Error should be a JSON object");
+        let error = query.error.expect("query should have aggregated error");
+        let error_map = error.as_object().expect("error should be a JSON object");
         let host_key = fragments[0].host_addr.to_string();
         assert!(
             error_map.contains_key(&host_key),
@@ -1180,10 +1135,7 @@ mod tests {
         );
     }
 
-    async fn prop_worker_internal_error_aggregated(
-        req: CreateQuery,
-        setup: ValidFragments,
-    ) {
+    async fn prop_worker_internal_error_aggregated(req: CreateQuery, setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -1222,8 +1174,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(query.current_state, QueryState::Failed);
-        let error = query.error.expect("Query should have aggregated error");
-        let error_map = error.as_object().expect("Error should be a JSON object");
+        let error = query.error.expect("query should have aggregated error");
+        let error_map = error.as_object().expect("error should be a JSON object");
         let host_key = fragments[0].host_addr.to_string();
         assert!(error_map.contains_key(&host_key));
         assert_eq!(
@@ -1232,10 +1184,7 @@ mod tests {
         );
     }
 
-    async fn prop_all_fragments_failed_errors_aggregated(
-        req: CreateQuery,
-        setup: ValidFragments,
-    ) {
+    async fn prop_all_fragments_failed_errors_aggregated(req: CreateQuery, setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();
@@ -1280,8 +1229,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(query.current_state, QueryState::Failed);
-        let error = query.error.expect("Query should have aggregated error");
-        let error_map = error.as_object().expect("Error should be a JSON object");
+        let error = query.error.expect("query should have aggregated error");
+        let error_map = error.as_object().expect("error should be a JSON object");
 
         let unique_hosts: std::collections::HashSet<String> =
             fragments.iter().map(|f| f.host_addr.to_string()).collect();
@@ -1401,10 +1350,7 @@ mod tests {
         );
     }
 
-    async fn prop_get_fragments_returns_created(
-        req: CreateQuery,
-        setup: ValidFragments,
-    ) {
+    async fn prop_get_fragments_returns_created(req: CreateQuery, setup: ValidFragments) {
         let catalog = Catalog::for_test().await;
         for w in &setup.workers {
             catalog.worker.create_worker(w.clone()).await.unwrap();

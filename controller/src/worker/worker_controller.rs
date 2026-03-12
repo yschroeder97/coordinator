@@ -39,11 +39,11 @@ impl WorkerStateInternal {
         match self {
             Connecting { handle, .. } => {
                 handle.abort();
-                debug!("Aborted pending connection for worker {}", addr);
+                debug!("aborted pending connection for worker {}", addr);
             }
             Active { .. } => {
                 registry.unregister(addr);
-                info!("Removed active worker {}", addr);
+                info!("removed active worker {}", addr);
             }
         }
     }
@@ -71,7 +71,7 @@ impl WorkerController {
     pub async fn run(mut self) {
         let mut intent_rx = self.worker_catalog.subscribe_intent();
         let mut state_rx = self.worker_catalog.subscribe_state();
-        info!("Starting");
+        info!("starting");
         // Reconcile once
         self.reconcile().await;
 
@@ -81,7 +81,7 @@ impl WorkerController {
                 // Client requested addition/removal of a worker
                 result = intent_rx.changed() => {
                     if result.is_err() {
-                        info!("Worker catalog notification channel closed, shutting down");
+                        info!("worker catalog notification channel closed, shutting down");
                         return;
                     }
                 }
@@ -96,7 +96,7 @@ impl WorkerController {
                         Err(e) if e.is_cancelled() => {}
                         // A panicked connect task: remove from internal state (might be added back in the next loop iteration)
                         Err(e) => {
-                            error!("Worker connection task failed: {:?}", e);
+                            error!("worker connection task failed: {:?}", e);
                             self.on_panic();
                         }
                     }
@@ -117,7 +117,7 @@ impl WorkerController {
         let mismatched_workers = match self.worker_catalog.get_mismatch().await {
             Ok(workers) => workers,
             Err(e) => {
-                warn!("Failed to fetch workers: {:?}", e);
+                warn!("failed to fetch workers: {:?}", e);
                 return;
             }
         };
@@ -131,7 +131,7 @@ impl WorkerController {
                     {
                         let old = self.workers.remove(&addr).unwrap();
                         old.cleanup(&addr, &self.registry);
-                        info!("Tearing down unreachable worker {}, will retry", addr);
+                        info!("tearing down unreachable worker {}, will retry", addr);
                         self.workers.insert(
                             addr,
                             WorkerStateInternal::connect(mismatch, &mut self.connecting),
@@ -150,9 +150,9 @@ impl WorkerController {
                         state.cleanup(&addr, &self.registry);
                     }
                     self.worker_catalog
-                        .delete_worker(&mismatch.host_addr)
+                        .remove_worker(mismatch.into())
                         .await
-                        .expect("No one else should delete a worker");
+                        .expect("failed to mark worker as removed");
                 }
             }
         }
@@ -164,7 +164,7 @@ impl WorkerController {
             Some(Connecting { model, .. }) => model,
             _ => {
                 debug!(
-                    "Connection succeeded for {} but worker was already removed",
+                    "connection succeeded for {} but worker was already removed",
                     addr
                 );
                 return;
@@ -177,7 +177,7 @@ impl WorkerController {
             .await
             .unwrap();
         self.registry.register(addr.clone(), rpc_sender);
-        info!(%addr, "Worker active");
+        info!(%addr, "worker active");
         let task_addr = addr.clone();
         let handle = self.active.spawn(async move {
             client.run().await;
@@ -189,26 +189,26 @@ impl WorkerController {
     fn on_client_exit(&mut self, result: Result<GrpcAddr, JoinError>) {
         match result {
             Ok(addr) => {
-                info!(%addr, "Worker client exited");
+                info!(%addr, "worker client exited");
                 self.registry.unregister(&addr);
                 self.workers.remove(&addr);
             }
             Err(e) if e.is_cancelled() => {}
             Err(e) => {
-                error!("Worker client task failed: {e:?}");
+                error!("worker client task failed: {e:?}");
                 self.on_panic();
             }
         }
     }
 
     async fn on_connect_err(&mut self, err: WorkerClientErr) {
-        error!("Failed to connect to worker: {:?}", err);
+        error!("failed to connect to worker: {:?}", err);
         let addr = err.addr().clone();
         let model = match self.workers.remove(&addr) {
             Some(Connecting { model, .. }) => model,
             _ => {
                 debug!(
-                    "Connection failed for {} but worker was already removed",
+                    "connection failed for {} but worker was already removed",
                     addr
                 );
                 return;
@@ -227,7 +227,7 @@ impl WorkerController {
                 Connecting { handle, .. } | Active { handle, .. } => handle.is_finished(),
             };
             if finished {
-                error!(%addr, "Worker task panicked");
+                error!(%addr, "worker task panicked");
                 if matches!(state, Active { .. }) {
                     self.registry.unregister(addr);
                 }

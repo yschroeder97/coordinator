@@ -1,12 +1,10 @@
 [[test]]
 title = "simple"
-timeout = 120
+timeout = 600
 buggify = false
 run_failure_workloads = false
 
   [[test.workload]]
   test_name = "Query"
-  num_ops = 2
-  test_duration = 5.0
-  create_weight = 1
-  drop_weight = 1
+  num_queries = 40
+  create_duration = 300.0

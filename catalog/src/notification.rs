@@ -30,13 +30,13 @@ impl NotificationChannel {
     pub(crate) fn notify_intent(&self) {
         self.intent_tx
             .send(())
-            .expect("Receiver is owned and should therefore be alive");
+            .expect("receiver is owned and should therefore be alive");
     }
 
     pub(crate) fn notify_state(&self) {
         self.state_tx
             .send(())
-            .expect("Receiver is owned and should therefore be alive");
+            .expect("receiver is owned and should therefore be alive");
     }
 
     pub(crate) fn subscribe_intent(&self) -> watch::Receiver<()> {

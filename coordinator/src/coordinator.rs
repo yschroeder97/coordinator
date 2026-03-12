@@ -189,7 +189,7 @@ impl Supervisor {
                     break;
                 }
                 Err(e) => {
-                    error!("Service task failed: {e}");
+                    error!("service task failed: {e}");
                     break;
                 }
             }
@@ -202,7 +202,7 @@ pub fn start(
     state_backend: Option<StateBackend>,
     request_buffer_size: Option<usize>,
 ) -> flume::Sender<CoordinatorRequest> {
-    info!("Starting");
+    info!("starting");
     let (handle, receiver) = flume::bounded(request_buffer_size.unwrap_or(DEFAULT_CAPACITY));
 
     std::thread::spawn(move || {
@@ -230,7 +230,7 @@ pub fn start(
 
 #[cfg(any(test, feature = "testing", madsim))]
 pub async fn start_for_test() -> flume::Sender<CoordinatorRequest> {
-    info!("Starting");
+    info!("starting");
     let (handle, receiver) = flume::bounded(DEFAULT_CAPACITY);
 
     let catalog = Catalog::for_test().await;
@@ -243,7 +243,7 @@ pub async fn start_for_test() -> flume::Sender<CoordinatorRequest> {
 
 #[cfg(madsim)]
 pub async fn start_for_sim(db_path: &str) -> flume::Sender<CoordinatorRequest> {
-    info!("Starting (sim, db={db_path})");
+    info!("starting (sim, db={db_path})");
     let (handle, receiver) = flume::bounded(DEFAULT_CAPACITY);
 
     let db = Database::with(StateBackend::sqlite(db_path))

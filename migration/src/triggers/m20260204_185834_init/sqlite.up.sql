@@ -49,7 +49,7 @@ BEGIN
                 THEN 'Failed'
             WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state != 'Completed')
                 THEN 'Completed'
-            WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state != 'Stopped')
+            WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state NOT IN ('Completed', 'Stopped'))
                 THEN 'Stopped'
             WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state NOT IN ('Running', 'Started'))
                 THEN 'Running'
