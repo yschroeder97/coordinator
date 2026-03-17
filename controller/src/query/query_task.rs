@@ -1,6 +1,7 @@
 use anyhow::Result;
 use crate::query::context::QueryContext;
 use crate::query::running;
+use crate::worker::worker_task::{RegisterFragmentRequest, Rpc, StartFragmentRequest};
 use model::query::StopMode;
 use model::query::fragment::FragmentState;
 use model::query::query_state::QueryState;
@@ -31,14 +32,26 @@ async fn transition(ctx: &mut QueryContext) -> Result<()> {
     match ctx.query.current_state {
         QueryState::Pending => plan_query(ctx).await,
         QueryState::Planned => {
-            let results = ctx.register_fragments().await;
-            ctx.apply_transition_results(results, FragmentState::Registered)
-                .await
+            ctx.transition_fragments(
+                FragmentState::Pending,
+                |id| {
+                    let (rx, req) = RegisterFragmentRequest::new(id);
+                    (rx, Rpc::RegisterFragment(req))
+                },
+                FragmentState::Registered,
+            )
+            .await
         }
         QueryState::Registered => {
-            let results = ctx.start_fragments().await;
-            ctx.apply_transition_results(results, FragmentState::Started)
-                .await
+            ctx.transition_fragments(
+                FragmentState::Registered,
+                |id| {
+                    let (rx, req) = StartFragmentRequest::new(id);
+                    (rx, Rpc::StartFragment(req))
+                },
+                FragmentState::Started,
+            )
+            .await
         }
         QueryState::Running => running::poll_until_complete(ctx).await,
         _ => unreachable!(),
@@ -66,10 +79,13 @@ async fn try_transition(
                         if let Err(e) = ctx.catalog.query.fail_pending_query(ctx.query.clone(), e.to_string()).await {
                             error!("failed to set query to failed: {e}");
                         }
-                    } else {
+                        false
+                    } else if ctx.query.current_state.is_terminal() {
                         ctx.rollback_fragments(StopMode::Forceful).await;
+                        false
+                    } else {
+                        true
                     }
-                    false
                 }
             }
         },

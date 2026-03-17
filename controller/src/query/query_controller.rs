@@ -1,17 +1,15 @@
-use crate::worker::poly_join_set::JoinSet;
-use crate::worker::worker_registry::WorkerRegistryHandle;
 use crate::query::QueryId;
 use crate::query::context::QueryContext;
 use crate::query::query_task;
+use crate::worker::poly_join_set::TaskMap;
+use crate::worker::worker_registry::WorkerRegistryHandle;
 use catalog::Catalog;
 use catalog::Reconcilable;
 use model::query::*;
 
 use model::query;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use common::supervised::supervised;
 use tracing::{debug, error, info, warn};
 
 const QUERY_CONTROLLER_POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -19,8 +17,7 @@ const QUERY_CONTROLLER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 pub struct QueryController {
     catalog: Arc<Catalog>,
     worker_registry: WorkerRegistryHandle,
-    reconcilers: JoinSet<QueryId>,
-    stop_channels: HashMap<QueryId, flume::Sender<StopMode>>,
+    reconcilers: TaskMap<QueryId, flume::Sender<StopMode>>,
 }
 
 impl QueryController {
@@ -28,32 +25,30 @@ impl QueryController {
         QueryController {
             catalog,
             worker_registry,
-            reconcilers: JoinSet::new(),
-            stop_channels: HashMap::default(),
+            reconcilers: TaskMap::new(),
         }
     }
 
     pub async fn run(mut self) {
         let mut intent = self.catalog.query.subscribe_intent();
         info!("starting");
-        // Reconcile once
         self.reconcile().await;
 
         loop {
-            // Select triggers reconciliation
             tokio::select! {
-                // Query create/drop requested by the client
-                result = intent.changed() => {
-                    if result.is_err() {
+                change = intent.changed() => {
+                    if change.is_err() {
                         info!("query catalog notification channel closed, shutting down");
                         return;
                     }
                 }
-                // An inner reconciliation task exited
-                Some(result) = self.reconcilers.join_next() => {
-                    self.on_reconciler_finished(result);
+                Some(task_result) = self.reconcilers.join_next() => {
+                    if let Err(e) = task_result {
+                        if !e.is_cancelled() {
+                            error!("reconciler task failed: {e:?}");
+                        }
+                    }
                 }
-                // Polling interval expired
                 _ = tokio::time::sleep(QUERY_CONTROLLER_POLL_INTERVAL) => {}
             }
             self.reconcile().await;
@@ -61,7 +56,6 @@ impl QueryController {
     }
 
     async fn reconcile(&mut self) {
-        // Acquire state mismatches from the catalog
         let mismatches = match self.catalog.query.get_mismatch().await {
             Ok(m) => m,
             Err(e) => {
@@ -70,25 +64,27 @@ impl QueryController {
             }
         };
 
-        // Check for each mismatch if it has a corresponding reconciliation task running
         for mismatch in mismatches {
-            match self.stop_channels.get(&mismatch.id) {
+            match self.reconcilers.get(&mismatch.id) {
                 Some(stop_channel) => match mismatch.desired_state {
                     query_state::DesiredQueryState::Completed => {
-                        debug!(query_id = mismatch.id, "reconciliation already running, skipping");
+                        debug!(
+                            query_id = mismatch.id,
+                            "reconciliation already running, skipping"
+                        );
                     }
                     query_state::DesiredQueryState::Stopped => {
                         self.send_stop_signal(&mismatch, stop_channel);
                     }
                 },
                 None => {
-                    self.spawn_reconciliation_task(mismatch);
+                    self.spawn_task(mismatch);
                 }
             }
         }
     }
 
-    fn spawn_reconciliation_task(&mut self, mismatch: query::Model) {
+    fn spawn_task(&mut self, mismatch: query::Model) {
         let (stop_tx, stop_rx) = flume::bounded(1);
         let query_id = mismatch.id;
 
@@ -99,40 +95,11 @@ impl QueryController {
             worker_registry: self.worker_registry.clone(),
         };
 
-        self.reconcilers.spawn(async move {
-            supervised(query_task::run(ctx, stop_rx)).await;
-            query_id
-        });
-        self.stop_channels.insert(query_id, stop_tx);
-    }
-
-    fn on_reconciler_finished(&mut self, result: Result<QueryId, tokio::task::JoinError>) {
-        match result {
-            Ok(query_id) => {
-                self.stop_channels.remove(&query_id);
-            }
-            Err(e) if e.is_cancelled() => {
-                self.cleanup();
-            }
-            Err(e) => {
-                error!("reconciler task failed: {e:?}");
-                self.cleanup();
-            }
-        }
-    }
-
-    fn cleanup(&mut self) {
-        self.stop_channels.retain(|id, sender| {
-            let alive = !sender.is_disconnected();
-            if !alive {
-                error!(query_id = id, "reconciler panicked");
-            }
-            alive
+        self.reconcilers.spawn(query_id, stop_tx, async move {
+            query_task::run(ctx, stop_rx).await;
         });
     }
 
-    // Uses try_send on a bounded(1) channel: if the buffer already holds a stop signal
-    // that the reconciler hasn't consumed yet, we skip rather than block the reconcile loop.
     fn send_stop_signal(
         &self,
         query_to_stop: &query::Model,
@@ -145,9 +112,11 @@ impl QueryController {
             Ok(_) => debug!(query_id = query_to_stop.id, ?mode, "sent stop signal"),
             Err(flume::TrySendError::Full(_)) => {}
             Err(flume::TrySendError::Disconnected(_)) => {
-                debug!(query_id = query_to_stop.id, "reconciliation task already finished")
+                debug!(
+                    query_id = query_to_stop.id,
+                    "reconciliation task already finished"
+                )
             }
         }
     }
 }
-

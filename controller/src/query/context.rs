@@ -1,10 +1,10 @@
 use crate::query::retry::RetryPolicy;
-use crate::worker::worker_client::{
-    GetFragmentStatusRequest, QueryStatusReply, RegisterFragmentRequest, Rpc, StartFragmentRequest,
-    StopFragmentRequest, WorkerClientErr,
+use crate::worker::worker_task::{
+    GetFragmentStatusRequest, QueryStatusReply, Rpc, StopFragmentRequest, WorkerClientErr,
 };
 use crate::worker::worker_registry::{WorkerError, WorkerRegistryHandle};
 use anyhow::{Result, anyhow};
+use common::error::Retryable;
 use catalog::Catalog;
 use futures_util::future;
 use model::Set;
@@ -20,9 +20,14 @@ fn transition_update(
     result: Result<(), WorkerError>,
     target: FragmentState,
 ) -> Option<fragment::ActiveModel> {
+    if fragment.current_state.is_terminal() {
+        return None;
+    }
     let mut am: fragment::ActiveModel = fragment.clone().into();
     match result {
         Ok(_) => am.current_state = Set(target),
+        Err(e) if e.retryable() => return None,
+        Err(e) if e.fragment_not_found() => am.current_state = Set(FragmentState::Pending),
         Err(e) => {
             am.current_state = Set(FragmentState::Failed);
             am.error = Set(Some(FragmentError::from(e)));
@@ -56,29 +61,56 @@ impl QueryContext {
         future::join_all(futures).await
     }
 
-    pub(crate) async fn register_fragments(&self) -> Vec<Result<(), WorkerError>> {
-        self.multicast(
-            |id| {
-                let (rx, req) = RegisterFragmentRequest::new(id);
-                (rx, Rpc::RegisterFragment(req))
-            },
-            &RetryPolicy::Transition,
-        )
-        .await
-        .into_iter()
-        .map(|r| r.map(|_| ()))
-        .collect()
-    }
+    pub(crate) async fn transition_fragments<F, Rsp>(
+        &mut self,
+        required_state: FragmentState,
+        mk_rpc: F,
+        target: FragmentState,
+    ) -> Result<()>
+    where
+        F: Fn(FragmentId) -> (oneshot::Receiver<Result<Rsp, WorkerClientErr>>, Rpc),
+        Rsp: Send + 'static,
+    {
+        let mk_rpc = &mk_rpc;
+        let retry = RetryPolicy::Transition;
+        let eligible: Vec<&fragment::Model> = self
+            .fragments
+            .iter()
+            .filter(|f| f.current_state == required_state)
+            .collect();
 
-    pub(crate) async fn start_fragments(&self) -> Vec<Result<(), WorkerError>> {
-        self.multicast(
-            |id| {
-                let (rx, req) = StartFragmentRequest::new(id);
-                (rx, Rpc::StartFragment(req))
-            },
-            &RetryPolicy::Transition,
-        )
-        .await
+        let futures = eligible
+            .iter()
+            .map(|fragment| retry.execute(&self.worker_registry, mk_rpc, fragment));
+        let results: Vec<_> = future::join_all(futures).await;
+
+        let has_transient_failures = results.iter().any(|r| match r {
+            Err(e) => e.retryable(),
+            Ok(_) => false,
+        });
+
+        let updates: Vec<_> = eligible
+            .iter()
+            .zip(results)
+            .filter_map(|(fragment, result)| {
+                transition_update(fragment, result.map(|_| ()), target)
+            })
+            .collect();
+
+        let (query, fragments) = self
+            .catalog
+            .query
+            .update_fragment_states(self.query.id, updates)
+            .await?;
+        self.query = query;
+        self.fragments = fragments;
+        if self.query.current_state == QueryState::Failed {
+            return Err(anyhow!("query failed"));
+        }
+        if has_transient_failures {
+            return Err(anyhow!("transient fragment failures"));
+        }
+        Ok(())
     }
 
     fn rollback_retry(&self) -> RetryPolicy {
@@ -117,6 +149,10 @@ impl QueryContext {
     where
         F: Fn(&fragment::Model, Result<Rsp, WorkerError>) -> Option<fragment::ActiveModel>,
     {
+        let has_transient_failures = results.iter().any(|r| match r {
+            Err(e) => e.retryable(),
+            Ok(_) => false,
+        });
         let updates: Vec<_> = self
             .fragments
             .iter()
@@ -133,6 +169,9 @@ impl QueryContext {
         self.fragments = fragments;
         if self.query.current_state == QueryState::Failed {
             return Err(anyhow!("query failed"));
+        }
+        if has_transient_failures {
+            return Err(anyhow!("transient fragment failures"));
         }
         Ok(())
     }

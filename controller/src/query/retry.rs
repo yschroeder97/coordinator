@@ -1,4 +1,4 @@
-use crate::worker::worker_client::{Rpc, WorkerClientErr};
+use crate::worker::worker_task::{Rpc, WorkerClientErr};
 use crate::worker::worker_registry::{WorkerError, WorkerRegistryHandle};
 use catalog::Catalog;
 use common::error::Retryable;
@@ -11,8 +11,8 @@ use tokio::sync::oneshot;
 use tokio_retry::RetryIf;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 
-const MAX_RPC_ATTEMPTS: usize = 5;
-const RPC_RETRY_BASE_MS: u64 = 50;
+const MAX_RPC_ATTEMPTS: usize = 6;
+const BACKOFF_FACTOR: u64 = 50;
 const ROLLBACK_RETRY_MAX: Duration = Duration::from_secs(30);
 
 pub(crate) enum RetryPolicy {
@@ -24,14 +24,16 @@ impl RetryPolicy {
     fn strategy(&self) -> Box<dyn Iterator<Item = Duration> + Send> {
         match self {
             Self::Transition => Box::new(
-                ExponentialBackoff::from_millis(RPC_RETRY_BASE_MS)
+                ExponentialBackoff::from_millis(2)
+                    .factor(BACKOFF_FACTOR)
                     .map(jitter)
                     .take(MAX_RPC_ATTEMPTS - 1),
             ),
             Self::Rollback { .. } => Box::new(
-                ExponentialBackoff::from_millis(RPC_RETRY_BASE_MS)
-                    .map(jitter)
-                    .map(|d| d.min(ROLLBACK_RETRY_MAX)),
+                ExponentialBackoff::from_millis(2)
+                    .factor(BACKOFF_FACTOR)
+                    .max_delay(ROLLBACK_RETRY_MAX)
+                    .map(jitter),
             ),
         }
     }
@@ -47,13 +49,12 @@ impl RetryPolicy {
         Rsp: Send + 'static,
     {
         let (rx, rpc) = mk_rpc(fragment.id);
-        let result = async {
-            registry.send(&fragment.grpc_addr, rpc).await?;
-            rx.await
-                .map_err(|_| WorkerError::ClientUnavailable(fragment.grpc_addr.clone()))?
-                .map_err(WorkerError::from)
-        }
-        .await;
+        let addr = fragment.grpc_addr.clone();
+        registry.send(&addr, rpc).await?;
+        let result = rx
+            .await
+            .map_err(|_| WorkerError::ClientUnavailable(addr.clone()))?
+            .map_err(WorkerError::from);
 
         match result {
             Err(e) if e.retryable() => {

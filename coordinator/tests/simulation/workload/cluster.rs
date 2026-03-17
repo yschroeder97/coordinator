@@ -15,13 +15,14 @@ use std::time::Duration;
 use tracing::info;
 
 const DEFAULT_NUM_OPS: usize = 15;
-const DEFAULT_TEST_DURATION: f64 = 30.0;
+const DEFAULT_END_SECS: u64 = 30;
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct ClusterConfig {
     num_ops: usize,
-    test_duration: f64,
+    begin: u64,
+    end: u64,
     create_weight: u32,
     drop_weight: u32,
 }
@@ -30,7 +31,8 @@ impl Default for ClusterConfig {
     fn default() -> Self {
         Self {
             num_ops: DEFAULT_NUM_OPS,
-            test_duration: DEFAULT_TEST_DURATION,
+            begin: 0,
+            end: DEFAULT_END_SECS,
             create_weight: 3,
             drop_weight: 1,
         }
@@ -39,7 +41,8 @@ impl Default for ClusterConfig {
 
 pub struct ClusterWorkload {
     num_ops: usize,
-    test_duration: Duration,
+    begin: Duration,
+    end: Duration,
     create_weight: u32,
     drop_weight: u32,
     state: RefCell<ClusterState>,
@@ -124,7 +127,8 @@ impl ClusterWorkload {
         let c: ClusterConfig = parse_options(options);
         Self {
             num_ops: c.num_ops,
-            test_duration: Duration::from_secs_f64(c.test_duration),
+            begin: Duration::from_secs(c.begin),
+            end: Duration::from_secs(c.end),
             create_weight: c.create_weight,
             drop_weight: c.drop_weight,
             state: RefCell::new(ClusterState::default()),
@@ -193,11 +197,13 @@ impl Workload for ClusterWorkload {
 
     async fn start(&self, harness: &TestHarness) {
         info!(
-            "{}: running {} ops over {:?}",
-            self.name(), self.num_ops, self.test_duration,
+            "{}: running {} ops ({:?}..{:?})",
+            self.name(), self.num_ops, self.begin, self.end,
         );
 
-        let delays = precompute_delays(self.num_ops, self.test_duration);
+        tokio::time::sleep(self.begin).await;
+
+        let delays = precompute_delays(self.num_ops, self.end - self.begin);
         let mut gen_state = GeneratorState::new(harness.num_workers());
         let mut result = ClusterState::default();
 

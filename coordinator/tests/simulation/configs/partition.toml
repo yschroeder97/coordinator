@@ -1,0 +1,43 @@
+[[test]]
+title = "partition"
+timeout = 200
+buggify = false
+run_failure_workloads = false
+
+  [[test.workload]]
+  name = "Query"
+  num_queries = 50
+  end = 60
+  drop_fraction = 0.3
+  drop_begin = 20
+  drop_end = 80
+
+  [[test.workload]]
+  name = "NetworkPartition"
+  begin = 5
+  end = 12
+  partition_rate = 0.25
+
+  [[test.workload]]
+  name = "NetworkPartition"
+  begin = 18
+  end = 25
+  partition_rate = 0.25
+
+  [[test.workload]]
+  name = "NetworkPartition"
+  begin = 30
+  end = 38
+  partition_rate = 0.25
+
+  [[test.workload]]
+  name = "NetworkPartition"
+  begin = 42
+  end = 50
+  partition_rate = 0.25
+
+  [[test.workload]]
+  name = "NetworkPartition"
+  begin = 52
+  end = 60
+  partition_rate = 0.25

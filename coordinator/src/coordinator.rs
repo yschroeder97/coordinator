@@ -2,7 +2,6 @@ use crate::request_handler::RequestHandler;
 use anyhow::Result;
 use catalog::Catalog;
 use catalog::database::{Database, StateBackend};
-use controller::worker::health_monitor::HealthMonitor;
 use controller::worker::worker_controller::WorkerController;
 use common::into_request;
 use common::request::Request;
@@ -112,14 +111,12 @@ const DEFAULT_CAPACITY: usize = 1024;
 #[derive(Debug, Clone, Copy, Display)]
 enum Service {
     WorkerController,
-    HealthMonitor,
     QueryController,
     RequestHandler,
 }
 
-const SERVICES: [Service; 4] = [
+const SERVICES: [Service; 3] = [
     Service::WorkerController,
-    Service::HealthMonitor,
     Service::QueryController,
     Service::RequestHandler,
 ];
@@ -152,11 +149,6 @@ impl Supervisor {
                 WorkerController::new(self.catalog.worker.clone(), self.registry.clone())
                     .run()
                     .instrument(info_span!("worker_controller")),
-            ),
-            Service::HealthMonitor => Box::pin(
-                HealthMonitor::new(self.catalog.worker.clone())
-                    .run()
-                    .instrument(info_span!("health_monitor")),
             ),
             Service::QueryController => Box::pin(
                 QueryController::new(self.catalog.clone(), self.registry.handle())

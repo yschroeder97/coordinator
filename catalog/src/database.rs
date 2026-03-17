@@ -9,7 +9,7 @@ use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::warn;
 
 const SQLITE_MAX_CONNECTIONS: u32 = 8;
-const RETRY_BASE_MS: u64 = 50;
+const RETRY_BACKOFF_FACTOR: u64 = 50;
 const MAX_RETRIES: usize = 5;
 
 #[derive(Default)]
@@ -93,7 +93,7 @@ impl Database {
         Fut: Future<Output = Result<T, DbErr>>,
     {
         RetryIf::spawn(
-            ExponentialBackoff::from_millis(RETRY_BASE_MS).map(jitter).take(MAX_RETRIES),
+            ExponentialBackoff::from_millis(2).factor(RETRY_BACKOFF_FACTOR).map(jitter).take(MAX_RETRIES),
             || op(self.conn.clone()),
             |err: &DbErr| {
                 if err.retryable() {

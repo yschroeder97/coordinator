@@ -103,10 +103,14 @@ impl QueryState {
                 QueryState::Stopped,
                 QueryState::Failed,
             ],
-            QueryState::Registered => {
-                vec![QueryState::Running, QueryState::Stopped, QueryState::Failed]
-            }
+            QueryState::Registered => vec![
+                QueryState::Planned,
+                QueryState::Running,
+                QueryState::Stopped,
+                QueryState::Failed,
+            ],
             QueryState::Running => vec![
+                QueryState::Planned,
                 QueryState::Completed,
                 QueryState::Stopped,
                 QueryState::Failed,

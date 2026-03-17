@@ -20,7 +20,6 @@ use proptest::strategy::Union;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::pin::Pin;
 use std::time::Duration;
 use tracing::info;
 
@@ -55,17 +54,6 @@ pub fn precompute_times(count: usize, start: Duration, span: Duration) -> Vec<Du
         .collect()
 }
 
-pub async fn run_ops<'a, F>(num_ops: usize, duration: Duration, name: &str, mut step: F)
-where
-    F: FnMut(usize) -> Pin<Box<dyn std::future::Future<Output = ()> + 'a>>,
-{
-    let delays = precompute_delays(num_ops, duration);
-    for i in 0..num_ops {
-        step(i).await;
-        tokio::time::sleep(delays[i]).await;
-    }
-    info!("{name}: completed {num_ops} ops");
-}
 
 pub fn generate_weighted<Op: Clone + Debug>(strategies: Vec<(u32, BoxedStrategy<Op>)>) -> Op {
     let strategy = Union::new_weighted(strategies);
@@ -100,7 +88,7 @@ pub fn parse_options<T: DeserializeOwned + Default>(
     }
     let table: toml::map::Map<String, toml::Value> = options
         .iter()
-        .filter(|(k, _)| k.as_str() != "test_name")
+        .filter(|(k, _)| k.as_str() != "name")
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     if table.is_empty() {
@@ -114,7 +102,6 @@ pub fn parse_options<T: DeserializeOwned + Default>(
 inventory::collect!(WorkloadFactory);
 
 pub struct FailureInjectorFactory {
-    pub name: &'static str,
     pub should_inject: fn(already_added: usize) -> bool,
     pub create: fn() -> Box<dyn Workload>,
 }
@@ -125,15 +112,15 @@ const MAX_FAILURE_INJECTIONS_PER_TYPE: usize = 3;
 const BASE_INJECTION_PROBABILITY: f64 = 0.1;
 
 pub fn create_workload(
-    test_name: &str,
+    name: &str,
     options: &HashMap<String, toml::Value>,
 ) -> Box<dyn Workload> {
     for factory in inventory::iter::<WorkloadFactory> {
-        if factory.name == test_name {
+        if factory.name == name {
             return (factory.create)(options);
         }
     }
-    panic!("unknown workload: {test_name}");
+    panic!("unknown workload: {name}");
 }
 
 pub fn inject_failure_workloads(workloads: &mut Vec<Box<dyn Workload>>) {

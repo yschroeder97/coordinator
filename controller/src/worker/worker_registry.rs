@@ -1,4 +1,4 @@
-use crate::worker::worker_client::{Rpc, WorkerClientErr};
+use crate::worker::worker_task::{Rpc, WorkerClientErr};
 use common::error::Retryable;
 use model::query::fragment::FragmentError;
 use model::worker::endpoint::{GrpcAddr, HostAddr};
@@ -18,13 +18,23 @@ pub(crate) enum WorkerError {
     WorkerRemoved(HostAddr),
 }
 
+impl WorkerError {
+    pub(crate) fn fragment_not_found(&self) -> bool {
+        matches!(
+            self,
+            Self::ClientError(WorkerClientErr::Grpc { status, .. })
+            if status.code() == tonic::Code::NotFound
+        )
+    }
+}
+
 impl Retryable for WorkerError {
     fn retryable(&self) -> bool {
         match self {
             Self::ClientUnavailable(_) | Self::ClientError(WorkerClientErr::Connection(..)) => {
                 true
             }
-            Self::ClientError(WorkerClientErr::Communication { status, .. }) => matches!(
+            Self::ClientError(WorkerClientErr::Grpc { status, .. }) => matches!(
                 status.code(),
                 tonic::Code::Unavailable
                     | tonic::Code::DeadlineExceeded
@@ -59,7 +69,7 @@ impl From<WorkerError> for FragmentError {
                     msg: format!("Connection to '{addr}' failed: {err}"),
                 }
             }
-            WorkerError::ClientError(WorkerClientErr::Communication { addr, status })
+            WorkerError::ClientError(WorkerClientErr::Grpc { addr, status })
                 if matches!(
                     status.code(),
                     tonic::Code::Unavailable
@@ -71,7 +81,7 @@ impl From<WorkerError> for FragmentError {
                     msg: format!("gRPC error at '{addr}': {status}"),
                 }
             }
-            WorkerError::ClientError(WorkerClientErr::Communication { status, .. }) => {
+            WorkerError::ClientError(WorkerClientErr::Grpc { status, .. }) => {
                 FragmentError::WorkerInternal {
                     code: meta_str(&status, "code").parse().unwrap_or(0),
                     msg: status.message().to_string(),
@@ -140,17 +150,32 @@ impl WorkerRegistry {
         }
     }
 
-    pub(crate) fn register(&self, addr: GrpcAddr, sender: flume::Sender<Rpc>) {
+    pub(crate) fn register(&self, addr: GrpcAddr, sender: flume::Sender<Rpc>) -> RegistryGuard {
         self.shared
             .write()
             .expect("no one should panic while holding this lock")
-            .insert(addr, sender);
+            .insert(addr.clone(), sender);
+        RegistryGuard {
+            registry: self.clone(),
+            addr,
+        }
     }
 
-    pub(crate) fn unregister(&self, addr: &GrpcAddr) {
+    fn unregister(&self, addr: &GrpcAddr) {
         self.shared
             .write()
             .expect("no one should panic while holding this lock")
             .remove(addr);
+    }
+}
+
+pub(crate) struct RegistryGuard {
+    registry: WorkerRegistry,
+    addr: GrpcAddr,
+}
+
+impl Drop for RegistryGuard {
+    fn drop(&mut self) {
+        self.registry.unregister(&self.addr);
     }
 }

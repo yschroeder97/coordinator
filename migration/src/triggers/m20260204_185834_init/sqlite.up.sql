@@ -10,14 +10,37 @@ BEGIN
         WHEN OLD.current_state = 'Planned' AND NEW.current_state NOT IN ('Registered', 'Stopped', 'Failed') THEN
             RAISE(ABORT, 'Invalid state transition: Planned must transition to one of (Registered, Stopped, Failed)')
 
-        WHEN OLD.current_state = 'Registered' AND NEW.current_state NOT IN ('Running', 'Stopped', 'Failed') THEN
-            RAISE(ABORT, 'Invalid state transition: Registered must transition to one of (Running, Stopped, Failed)')
+        WHEN OLD.current_state = 'Registered' AND NEW.current_state NOT IN ('Planned', 'Running', 'Stopped', 'Failed') THEN
+            RAISE(ABORT, 'Invalid state transition: Registered must transition to one of (Planned, Running, Stopped, Failed)')
 
-        WHEN OLD.current_state = 'Running' AND NEW.current_state NOT IN ('Stopped', 'Completed', 'Failed') THEN
-            RAISE(ABORT, 'Invalid state transition: Running must transition to one of (Stopped, Completed, Failed)')
+        WHEN OLD.current_state = 'Running' AND NEW.current_state NOT IN ('Planned', 'Stopped', 'Completed', 'Failed') THEN
+            RAISE(ABORT, 'Invalid state transition: Running must transition to one of (Planned, Stopped, Completed, Failed)')
 
         WHEN OLD.current_state IN ('Completed', 'Stopped', 'Failed') THEN
             RAISE(ABORT, 'Invalid state transition: Cannot transition from a terminal state')
+    END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS validate_fragment_state_transition
+    BEFORE UPDATE OF current_state
+    ON fragment
+    WHEN NEW.current_state != OLD.current_state
+BEGIN
+    SELECT CASE
+        WHEN OLD.current_state = 'Pending' AND NEW.current_state NOT IN ('Registered', 'Stopped', 'Failed') THEN
+            RAISE(ABORT, 'Invalid fragment state transition: Pending must transition to one of (Registered, Stopped, Failed)')
+
+        WHEN OLD.current_state = 'Registered' AND NEW.current_state NOT IN ('Pending', 'Started', 'Stopped', 'Failed') THEN
+            RAISE(ABORT, 'Invalid fragment state transition: Registered must transition to one of (Pending, Started, Stopped, Failed)')
+
+        WHEN OLD.current_state = 'Started' AND NEW.current_state NOT IN ('Pending', 'Running', 'Stopped', 'Failed') THEN
+            RAISE(ABORT, 'Invalid fragment state transition: Started must transition to one of (Pending, Running, Stopped, Failed)')
+
+        WHEN OLD.current_state = 'Running' AND NEW.current_state NOT IN ('Pending', 'Completed', 'Stopped', 'Failed') THEN
+            RAISE(ABORT, 'Invalid fragment state transition: Running must transition to one of (Pending, Completed, Stopped, Failed)')
+
+        WHEN OLD.current_state IN ('Completed', 'Stopped', 'Failed') THEN
+            RAISE(ABORT, 'Invalid fragment state transition: Cannot transition from a terminal state')
     END;
 END;
 
@@ -47,13 +70,15 @@ BEGIN
         (SELECT CASE
             WHEN EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state = 'Failed')
                 THEN 'Failed'
+            WHEN EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state = 'Pending')
+                THEN 'Planned'
             WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state != 'Completed')
                 THEN 'Completed'
             WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state NOT IN ('Completed', 'Stopped'))
                 THEN 'Stopped'
-            WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state NOT IN ('Running', 'Started'))
+            WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state NOT IN ('Running', 'Started', 'Completed'))
                 THEN 'Running'
-            WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state != 'Registered')
+            WHEN NOT EXISTS (SELECT 1 FROM fragment WHERE query_id = NEW.query_id AND current_state NOT IN ('Registered', 'Started', 'Running', 'Completed'))
                 THEN 'Registered'
             ELSE NULL
         END),

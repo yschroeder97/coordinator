@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 600;
-const DEFAULT_CONVERGENCE_TIMEOUT_SECS: u64 = 60;
 const DEFAULT_BUGGIFY_PROBABILITY: f64 = 0.25;
 
 #[derive(Debug, Deserialize)]
@@ -16,7 +15,6 @@ pub struct TestFile {
 pub struct TestSpec {
     pub title: Option<String>,
     pub timeout: Option<u64>,
-    pub convergence_timeout: Option<u64>,
     pub buggify: Option<bool>,
     pub run_failure_workloads: Option<bool>,
     pub network: Option<NetworkConfig>,
@@ -66,7 +64,7 @@ impl TryFrom<RawNetworkConfig> for NetworkConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct WorkloadOptions {
-    pub test_name: String,
+    pub name: String,
     #[serde(flatten)]
     pub options: HashMap<String, toml::Value>,
 }
@@ -74,13 +72,6 @@ pub struct WorkloadOptions {
 impl TestSpec {
     pub fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS))
-    }
-
-    pub fn convergence_timeout(&self) -> Duration {
-        Duration::from_secs(
-            self.convergence_timeout
-                .unwrap_or(DEFAULT_CONVERGENCE_TIMEOUT_SECS),
-        )
     }
 
     pub fn run_failure_workloads(&self) -> bool {

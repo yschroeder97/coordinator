@@ -1,6 +1,6 @@
 #![cfg(madsim)]
 use crate::harness::TestHarness;
-use crate::workload::{FailureInjectorFactory, Workload, WorkloadFactory, parse_options, run_ops};
+use crate::workload::{FailureInjectorFactory, Workload, WorkloadFactory, parse_options};
 use async_trait::async_trait;
 use madsim::net::NetSim;
 use madsim::rand::{Rng, thread_rng};
@@ -8,40 +8,34 @@ use madsim::runtime::Handle;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::iter::once;
-use std::ops::Range;
 use std::time::Duration;
 use tracing::info;
 
-const DEFAULT_NUM_OPS: usize = 10;
-const DEFAULT_TEST_DURATION: f64 = 30.0;
+const DEFAULT_END_SECS: u64 = 30;
+const DEFAULT_PARTITION_RATE: f64 = 0.15;
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct PartitionConfig {
-    num_ops: usize,
-    test_duration: f64,
+    begin: u64,
+    end: u64,
     partition_rate: f64,
-    duration_lo_secs: u64,
-    duration_hi_secs: u64,
 }
 
 impl Default for PartitionConfig {
     fn default() -> Self {
         Self {
-            num_ops: DEFAULT_NUM_OPS,
-            test_duration: DEFAULT_TEST_DURATION,
-            partition_rate: 0.15,
-            duration_lo_secs: 1,
-            duration_hi_secs: 10,
+            begin: 0,
+            end: DEFAULT_END_SECS,
+            partition_rate: DEFAULT_PARTITION_RATE,
         }
     }
 }
 
 pub struct PartitionWorkload {
-    num_ops: usize,
-    test_duration: Duration,
+    begin: Duration,
+    end: Duration,
     partition_rate: f64,
-    duration: Range<Duration>,
 }
 
 impl PartitionWorkload {
@@ -50,10 +44,9 @@ impl PartitionWorkload {
     pub fn from_options(options: &HashMap<String, toml::Value>) -> Self {
         let c: PartitionConfig = parse_options(options);
         Self {
-            num_ops: c.num_ops,
-            test_duration: Duration::from_secs_f64(c.test_duration),
+            begin: Duration::from_secs(c.begin),
+            end: Duration::from_secs(c.end),
             partition_rate: c.partition_rate,
-            duration: Duration::from_secs(c.duration_lo_secs)..Duration::from_secs(c.duration_hi_secs),
         }
     }
 
@@ -74,13 +67,11 @@ impl Workload for PartitionWorkload {
 
     async fn start(&self, harness: &TestHarness) {
         info!(
-            "{}: {} ops over {:?} rate={:.0}% partition_duration={:?}..{:?}",
+            "{}: ({:?}..{:?}) rate={:.0}%",
             self.name(),
-            self.num_ops,
-            self.test_duration,
+            self.begin,
+            self.end,
             self.partition_rate * 100.0,
-            self.duration.start,
-            self.duration.end,
         );
 
         let all_names: Vec<String> = once("coordinator".to_string())
@@ -95,43 +86,38 @@ impl Workload for PartitionWorkload {
         let net = NetSim::current();
         let rt = Handle::current();
 
-        run_ops(self.num_ops, self.test_duration, self.name(), |_| {
-            Box::pin(async {
-                let mut rng = thread_rng();
+        let mut rng = thread_rng();
+        let mut clogged = Vec::new();
+        for (i, src_name) in all_names.iter().enumerate() {
+            for dst_name in &all_names[i + 1..] {
                 if !rng.gen_bool(self.partition_rate) {
-                    return;
+                    continue;
                 }
-
-                let src_idx = rng.gen_range(0..all_names.len());
-                let mut dst_idx = rng.gen_range(0..all_names.len() - 1);
-                if dst_idx >= src_idx {
-                    dst_idx += 1;
-                }
-
-                let src_name = all_names[src_idx].clone();
-                let dst_name = all_names[dst_idx].clone();
-
-                let src_node = rt.get_node(&src_name);
-                let dst_node = rt.get_node(&dst_name);
-
-                let (src_id, dst_id) = match (src_node, dst_node) {
+                let (src_id, dst_id) = match (rt.get_node(src_name), rt.get_node(dst_name)) {
                     (Some(s), Some(d)) => (s.id(), d.id()),
-                    _ => return,
+                    _ => continue,
                 };
+                clogged.push((src_name.clone(), dst_name.clone(), src_id, dst_id));
+            }
+        }
 
-                let duration = rng.gen_range(self.duration.clone());
-                info!("partition: clog {src_name} -> {dst_name} for {duration:?}");
-                net.clog_link(src_id, dst_id);
+        if clogged.is_empty() {
+            return;
+        }
 
-                let net_ref = net.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(duration).await;
-                    net_ref.unclog_link(src_id, dst_id);
-                    info!("partition: heal {src_name} -> {dst_name}");
-                });
-            })
-        })
-        .await;
+        tokio::time::sleep(self.begin).await;
+        for (src_name, dst_name, src_id, dst_id) in &clogged {
+            info!("partition: clog {src_name} <-> {dst_name}");
+            net.clog_link(*src_id, *dst_id);
+            net.clog_link(*dst_id, *src_id);
+        }
+
+        tokio::time::sleep(self.end - self.begin).await;
+        for (src_name, dst_name, src_id, dst_id) in &clogged {
+            net.unclog_link(*src_id, *dst_id);
+            net.unclog_link(*dst_id, *src_id);
+            info!("partition: heal {src_name} <-> {dst_name}");
+        }
     }
 }
 
@@ -144,7 +130,6 @@ inventory::submit! {
 
 inventory::submit! {
     FailureInjectorFactory {
-        name: PartitionWorkload::NAME,
         should_inject: |already_added| already_added == 0,
         create: || Box::new(PartitionWorkload::with_defaults()),
     }

@@ -3,10 +3,10 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tonic::{Request, Response, Status};
 use madsim::rand::Rng;
-use tracing::{debug, error, instrument};
+use tracing::{debug, instrument};
 
-use controller::worker::health_monitor::health_proto;
-use controller::worker::worker_client::worker_rpc_service;
+use controller::worker::worker_task::health_proto;
+use controller::worker::worker_task::worker_rpc_service;
 
 use worker_rpc_service::worker_rpc_service_server::WorkerRpcService;
 pub use worker_rpc_service::worker_rpc_service_server::WorkerRpcServiceServer;
@@ -24,11 +24,6 @@ type FragmentId = u64;
 
 const STARTUP_DELAY_LO_MS: u64 = 10;
 const STARTUP_DELAY_HI_MS: u64 = 500;
-const STARTUP_FAILURE_PROBABILITY: f64 = 0.05;
-const RPC_DELAY_PROBABILITY: f64 = 0.1;
-const RPC_DELAY_LO_MS: u64 = 100;
-const RPC_DELAY_HI_MS: u64 = 2000;
-const BUGGIFY_ERROR_CODE: u64 = 9999;
 
 #[derive(Clone)]
 struct StateChange {
@@ -98,15 +93,6 @@ fn current_timestamp_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn buggify_error(message: &str) -> worker_rpc_service::Error {
-    worker_rpc_service::Error {
-        code: BUGGIFY_ERROR_CODE,
-        message: message.to_string(),
-        stack_trace: String::new(),
-        location: String::new(),
-    }
-}
-
 pub struct HealthServiceImpl;
 
 #[tonic::async_trait]
@@ -131,24 +117,6 @@ impl SingleNodeWorker {
             fragments: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-
-    fn maybe_fail() -> Result<(), Status> {
-        if madsim::buggify::buggify() {
-            error!("buggify: simulated RPC failure");
-            return Err(Status::internal("buggify: simulated RPC failure"));
-        }
-        Ok(())
-    }
-
-    async fn maybe_delay() {
-        if madsim::buggify::buggify_with_prob(RPC_DELAY_PROBABILITY) {
-            let delay = Duration::from_millis(
-                madsim::rand::thread_rng().gen_range(RPC_DELAY_LO_MS..RPC_DELAY_HI_MS),
-            );
-            debug!("buggify: injecting {delay:?} RPC delay");
-            tokio::time::sleep(delay).await;
-        }
-    }
 }
 
 #[tonic::async_trait]
@@ -158,15 +126,11 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<RegisterQueryRequest>,
     ) -> Result<Response<RegisterQueryReply>, Status> {
-        Self::maybe_fail()?;
-        Self::maybe_delay().await;
-
         let id = request.get_ref().query_id;
         let mut fragments = self.fragments.write().unwrap();
         if fragments.contains_key(&id) {
-            return Err(Status::already_exists(format!(
-                "query {id} already registered"
-            )));
+            debug!("register_query: query {id} already registered, ignoring");
+            return Ok(Response::new(RegisterQueryReply {}));
         }
         fragments.insert(id, QueryFragment::new());
         debug!("registered query {id}");
@@ -178,8 +142,6 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<StartQueryRequest>,
     ) -> Result<Response<()>, Status> {
-        Self::maybe_fail()?;
-        Self::maybe_delay().await;
         let query_id = request.get_ref().query_id;
 
         {
@@ -189,9 +151,8 @@ impl WorkerRpcService for SingleNodeWorker {
                 .ok_or_else(|| Status::not_found(format!("query {query_id} not found")))?;
 
             if fragment.state != QueryState::Registered as i32 {
-                return Err(Status::failed_precondition(format!(
-                    "query {query_id} not in Registered state"
-                )));
+                debug!("start_query: query {query_id} not in Registered state, ignoring");
+                return Ok(Response::new(()));
             }
 
             fragment.record_transition(QueryState::Started as i32, None);
@@ -208,16 +169,8 @@ impl WorkerRpcService for SingleNodeWorker {
             let mut map = fragments.write().unwrap();
             if let Some(fragment) = map.get_mut(&query_id) {
                 if fragment.state == QueryState::Started as i32 {
-                    if madsim::buggify::buggify_with_prob(STARTUP_FAILURE_PROBABILITY) {
-                        error!("buggify: query {query_id} failed during startup");
-                        fragment.record_transition(
-                            QueryState::Failed as i32,
-                            Some(buggify_error("buggify: query failed during startup")),
-                        );
-                    } else {
-                        fragment.record_transition(QueryState::Running as i32, None);
-                        debug!("query {query_id} now running");
-                    }
+                    fragment.record_transition(QueryState::Running as i32, None);
+                    debug!("query {query_id} now running");
                 }
             }
         });
@@ -230,8 +183,6 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<StopQueryRequest>,
     ) -> Result<Response<()>, Status> {
-        Self::maybe_fail()?;
-        Self::maybe_delay().await;
         let query_id = request.get_ref().query_id;
         let termination_type =
             QueryTerminationType::try_from(request.get_ref().termination_type).ok();
@@ -250,10 +201,7 @@ impl WorkerRpcService for SingleNodeWorker {
         }
 
         if termination_type == Some(QueryTerminationType::Failure) {
-            fragment.record_transition(
-                QueryState::Failed as i32,
-                Some(buggify_error("stopped with Failure termination type")),
-            );
+            fragment.record_transition(QueryState::Failed as i32, None);
         } else {
             fragment.record_transition(QueryState::Stopped as i32, None);
         }
@@ -266,8 +214,6 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<QueryStatusRequest>,
     ) -> Result<Response<QueryStatusReply>, Status> {
-        Self::maybe_fail()?;
-        Self::maybe_delay().await;
         let query_id = request.get_ref().query_id;
         let fragments = self.fragments.read().unwrap();
         let fragment = fragments
@@ -286,8 +232,6 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<QueryLogRequest>,
     ) -> Result<Response<QueryLogReply>, Status> {
-        Self::maybe_fail()?;
-        Self::maybe_delay().await;
         let query_id = request.get_ref().query_id;
         let fragments = self.fragments.read().unwrap();
         let fragment = fragments
@@ -312,8 +256,6 @@ impl WorkerRpcService for SingleNodeWorker {
         &self,
         request: Request<WorkerStatusRequest>,
     ) -> Result<Response<WorkerStatusResponse>, Status> {
-        Self::maybe_fail()?;
-        Self::maybe_delay().await;
         let after = request.get_ref().after_unix_timestamp_in_ms;
         let fragments = self.fragments.read().unwrap();
 

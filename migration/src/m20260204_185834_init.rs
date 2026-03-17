@@ -28,7 +28,7 @@ impl MigrationTrait for Migration {
         match manager.get_database_backend() {
             DbBackend::MySql | DbBackend::Postgres => {
                 return Err(DbErr::Custom(
-                    "Only SQLite is currently supported".to_string(),
+                    "only SQLite is currently supported".to_string(),
                 ));
             }
             DbBackend::Sqlite => {

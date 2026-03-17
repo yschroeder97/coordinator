@@ -3,25 +3,25 @@ use crate::spec::NetworkConfig;
 use crate::worker::{HealthServer, HealthServiceImpl, SingleNodeWorker, WorkerRpcServiceServer};
 use anyhow::Result;
 use common::request::Request;
-use controller::worker::worker_client::worker_rpc_service;
 use coordinator::coordinator::{CoordinatorRequest, start_for_sim};
 use madsim::net::NetSim;
 use madsim::runtime::{Handle, NodeHandle};
-use model::{query, worker};
-use model::query::GetQuery;
-use model::query::query_state::{DesiredQueryState, QueryState};
+use model::worker;
 use model::worker::endpoint::{GrpcAddr, NetworkAddr};
-use model::worker::{CreateWorker, DesiredWorkerState, GetWorker, WorkerState};
+use model::worker::{CreateWorker, GetWorker, WorkerState};
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
-use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
-use tonic::transport::{Endpoint, Server};
+use tonic::transport::Server;
+use std::collections::{HashMap, HashSet};
+use tonic::transport::Endpoint;
 use tracing::{debug, info};
+
+use controller::worker::worker_task::worker_rpc_service;
 use worker_rpc_service::worker_rpc_service_client::WorkerRpcServiceClient;
 
 const COORDINATOR_NAME: &str = "coordinator";
@@ -32,6 +32,8 @@ const DEFAULT_SEND_LATENCY_HI: Duration = Duration::from_millis(100);
 pub const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(30);
+const COORDINATOR_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const COORDINATOR_READY_POLL: Duration = Duration::from_millis(100);
 const CHACHA_SEED_BYTES: usize = 32;
 const SEED_CHUNK_SIZE: usize = 8;
 
@@ -128,14 +130,33 @@ impl TestHarness {
         COORDINATOR_NAME
     }
 
+    async fn wait_for_coordinator(&self) -> flume::Sender<CoordinatorRequest> {
+        let deadline = tokio::time::Instant::now() + COORDINATOR_READY_TIMEOUT;
+        loop {
+            {
+                let mut guard = self.coordinator_sender.lock().unwrap();
+                if let Some(ref sender) = *guard {
+                    if !sender.is_disconnected() {
+                        return sender.clone();
+                    }
+                    *guard = None;
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "coordinator not available within {COORDINATOR_READY_TIMEOUT:?}"
+            );
+            tokio::time::sleep(COORDINATOR_READY_POLL).await;
+        }
+    }
+
     pub async fn send<P, R>(&self, payload: P) -> R
     where
         P: Debug,
         Request<P, R>: Into<CoordinatorRequest>,
     {
+        let sender = self.wait_for_coordinator().await;
         let (rx, req) = Request::new(payload);
-        let sender = self.coordinator_sender.lock().unwrap().clone()
-            .expect("coordinator not started");
         sender.send_async(req.into()).await.unwrap();
         tokio::time::timeout(SEND_TIMEOUT, rx)
             .await
@@ -204,7 +225,7 @@ impl TestHarness {
     }
 
     async fn register_workers(&self) {
-        let strategy = ExponentialBackoff::from_millis(100).map(jitter).take(10);
+        let strategy = ExponentialBackoff::from_millis(2).factor(50).map(jitter).take(10);
         for worker in &self.workers {
             Retry::spawn(strategy.clone(), || async {
                 let result: anyhow::Result<worker::Model> =
@@ -239,88 +260,14 @@ impl TestHarness {
         }
     }
 
-    pub fn reset_network(&self) {
-        let net = NetSim::current();
-        let rt = Handle::current();
-
-        let node_ids: Vec<_> = std::iter::once(COORDINATOR_NAME.to_string())
-            .chain((0..self.workers.len()).map(|i| self.worker_name(i)))
-            .filter_map(|name| rt.get_node(&name).map(|n| n.id()))
-            .collect();
-
-        for &src in &node_ids {
-            net.unclog_node(src);
-            for &dst in &node_ids {
-                if src != dst {
-                    net.unclog_link(src, dst);
-                }
-            }
-        }
-
-        net.update_config(|cfg| {
-            cfg.send_latency = DEFAULT_SEND_LATENCY_LO..DEFAULT_SEND_LATENCY_HI;
-            cfg.packet_loss_rate = 0.0;
-        });
-    }
-
     pub fn restart_worker(&self, index: usize) {
         let name = self.worker_name(index);
         Handle::current().restart(&name);
     }
 
-    pub async fn wait_convergence(&self, query_ids: &[i64], max_wait: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + max_wait;
-        loop {
-            if tokio::time::Instant::now() >= deadline {
-                info!("convergence timeout after {max_wait:?}");
-                return false;
-            }
-            let results: Vec<(query::Model, Vec<_>)> = self
-                .send(GetQuery::all().with_ids(query_ids.to_vec()))
-                .await
-                .unwrap();
-
-            let queries_converged = results.iter().all(|(q, _)| match q.desired_state {
-                DesiredQueryState::Completed => {
-                    q.current_state == QueryState::Running || q.current_state.is_terminal()
-                }
-                DesiredQueryState::Stopped => q.current_state.is_terminal(),
-            });
-
-            let workers: Vec<worker::Model> = self.send(GetWorker::all()).await.unwrap();
-
-            let workers_converged = workers.iter().all(|w| {
-                w.desired_state != DesiredWorkerState::Active
-                    || w.current_state == WorkerState::Active
-            });
-
-            if queries_converged && workers_converged {
-                return true;
-            }
-
-            info!(
-                "waiting for convergence: queries={:?}, workers={:?}",
-                results
-                    .iter()
-                    .filter(|(q, _)| match q.desired_state {
-                        DesiredQueryState::Completed => {
-                            q.current_state != QueryState::Running && !q.current_state.is_terminal()
-                        }
-                        DesiredQueryState::Stopped => !q.current_state.is_terminal(),
-                    })
-                    .map(|(q, _)| (q.id, q.current_state, q.desired_state))
-                    .collect::<Vec<_>>(),
-                workers
-                    .iter()
-                    .filter(|w| w.desired_state == DesiredWorkerState::Active && w.current_state != WorkerState::Active)
-                    .map(|w| (&w.host_addr, w.current_state))
-                    .collect::<Vec<_>>()
-            );
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    }
-
-    pub async fn active_fragments_by_worker(&self) -> HashMap<GrpcAddr, HashSet<u64>> {
+    pub async fn active_fragments_by_worker(
+        &self,
+    ) -> HashMap<GrpcAddr, HashSet<u64>> {
         let workers: Vec<worker::Model> = self.send(GetWorker::all()).await.unwrap();
 
         let (tx, rx) = flume::bounded(1);

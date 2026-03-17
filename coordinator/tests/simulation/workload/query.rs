@@ -18,37 +18,39 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 const DEFAULT_NUM_QUERIES: usize = 15;
-const DEFAULT_CREATE_DURATION: f64 = 30.0;
-const SENTINEL: f64 = -1.0;
+const DEFAULT_END_SECS: u64 = 30;
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct QueryConfig {
     num_queries: usize,
-    create_duration: f64,
+    begin: u64,
+    end: u64,
     drop_fraction: f64,
-    drop_start: f64,
-    drop_duration: f64,
+    drop_begin: Option<u64>,
+    drop_end: Option<u64>,
 }
 
 impl Default for QueryConfig {
     fn default() -> Self {
         Self {
             num_queries: DEFAULT_NUM_QUERIES,
-            create_duration: DEFAULT_CREATE_DURATION,
+            begin: 0,
+            end: DEFAULT_END_SECS,
             drop_fraction: 0.0,
-            drop_start: SENTINEL,
-            drop_duration: SENTINEL,
+            drop_begin: None,
+            drop_end: None,
         }
     }
 }
 
 pub struct QueryWorkload {
     num_queries: usize,
-    create_duration: Duration,
+    begin: Duration,
+    end: Duration,
     num_drops: usize,
-    drop_start: Duration,
-    drop_duration: Duration,
+    drop_begin: Duration,
+    drop_end: Duration,
     timeline: Vec<(Duration, QueryOp)>,
     state: RefCell<QueryWorkloadState>,
 }
@@ -67,14 +69,15 @@ enum QueryOp {
 
 fn build_timeline(
     num_queries: usize,
-    create_duration: Duration,
+    begin: Duration,
+    end: Duration,
     num_drops: usize,
-    drop_start: Duration,
-    drop_duration: Duration,
+    drop_begin: Duration,
+    drop_end: Duration,
 ) -> Vec<(Duration, QueryOp)> {
     let mut rng = madsim::rand::thread_rng();
 
-    let create_times = precompute_times(num_queries, Duration::ZERO, create_duration);
+    let create_times = precompute_times(num_queries, begin, end - begin);
     let mut timeline: Vec<(Duration, QueryOp)> = create_times
         .into_iter()
         .enumerate()
@@ -89,7 +92,7 @@ fn build_timeline(
         }
         drop_indices.truncate(num_drops);
 
-        let raw_drop_times = precompute_times(num_drops, drop_start, drop_duration);
+        let raw_drop_times = precompute_times(num_drops, drop_begin, drop_end - drop_begin);
 
         let mut drop_entries: Vec<(usize, Duration)> =
             drop_indices.into_iter().zip(raw_drop_times).collect();
@@ -117,23 +120,17 @@ impl QueryWorkload {
 
     pub fn from_options(options: &HashMap<String, toml::Value>) -> Self {
         let c: QueryConfig = parse_options(options);
-        let drop_start = if c.drop_start == SENTINEL {
-            c.create_duration
-        } else {
-            c.drop_start
-        };
-        let drop_duration = if c.drop_duration == SENTINEL {
-            c.create_duration
-        } else {
-            c.drop_duration
-        };
+        let span = c.end - c.begin;
+        let drop_begin = c.drop_begin.unwrap_or(c.end);
+        let drop_end = c.drop_end.unwrap_or(drop_begin + span);
         let num_drops = (c.num_queries as f64 * c.drop_fraction).round() as usize;
         Self {
             num_queries: c.num_queries,
-            create_duration: Duration::from_secs_f64(c.create_duration),
+            begin: Duration::from_secs(c.begin),
+            end: Duration::from_secs(c.end),
             num_drops,
-            drop_start: Duration::from_secs_f64(drop_start),
-            drop_duration: Duration::from_secs_f64(drop_duration),
+            drop_begin: Duration::from_secs(drop_begin),
+            drop_end: Duration::from_secs(drop_end),
             timeline: Vec::new(),
             state: RefCell::new(QueryWorkloadState::default()),
         }
@@ -192,10 +189,11 @@ impl Workload for QueryWorkload {
     async fn setup(&mut self, _harness: &TestHarness) {
         self.timeline = build_timeline(
             self.num_queries,
-            self.create_duration,
+            self.begin,
+            self.end,
             self.num_drops,
-            self.drop_start,
-            self.drop_duration,
+            self.drop_begin,
+            self.drop_end,
         );
     }
 
@@ -243,7 +241,7 @@ impl Workload for QueryWorkload {
         let ctx = InvariantContext::build(harness, created_ids, dropped_ids).await;
 
         check_invariants(
-            &[&QueryLiveness, &QueryTermination, &NoPhantomFragments],
+            &[&QueryLiveness, &QueryTermination, &Leakage],
             harness,
             &ctx,
         )
@@ -336,12 +334,12 @@ impl Invariant for QueryTermination {
 /// Every fragment ID reported as active by a worker must correspond to a fragment
 /// the coordinator knows about. Catches leaked fragments where a stop RPC failed
 /// silently but the coordinator moved on.
-pub struct NoPhantomFragments;
+pub struct Leakage;
 
 #[async_trait(?Send)]
-impl Invariant for NoPhantomFragments {
+impl Invariant for Leakage {
     fn name(&self) -> &str {
-        "no_phantom_fragments"
+        "leakage"
     }
 
     async fn check(&self, _harness: &TestHarness, ctx: &InvariantContext) {
@@ -355,7 +353,7 @@ impl Invariant for NoPhantomFragments {
             for id in active_ids {
                 assert!(
                     known.contains(id),
-                    "no_phantom_fragments: worker {} reports fragment {} active but coordinator has no record of it",
+                    "leakage: worker {} reports fragment {} active but coordinator has no record of it",
                     addr,
                     id,
                 );

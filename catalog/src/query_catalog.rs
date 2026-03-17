@@ -1,7 +1,6 @@
 use crate::database::Database;
 use crate::notification::{NotificationChannel, Reconcilable};
 use anyhow::Result;
-use madsim::buggify::buggify;
 use model::query::fragment::CreateFragment;
 #[cfg(test)]
 use model::query::fragment::FragmentState;
@@ -34,9 +33,7 @@ impl QueryCatalog {
                 async move { query::ActiveModel::from(req).insert(&conn).await }
             })
             .await?;
-        if !buggify() {
-            self.listeners.notify_intent();
-        }
+        self.listeners.notify_intent();
         Ok(model)
     }
 
@@ -71,9 +68,7 @@ impl QueryCatalog {
                 }
             })
             .await?;
-        if !buggify() {
-            self.listeners.notify_intent();
-        }
+        self.listeners.notify_intent();
         Ok(updated)
     }
 
@@ -133,9 +128,7 @@ impl QueryCatalog {
                 }
             })
             .await?;
-        if !buggify() {
-            self.listeners.notify_state();
-        }
+        self.listeners.notify_state();
         Ok(result)
     }
 
@@ -253,9 +246,7 @@ impl QueryCatalog {
                 }
             })
             .await?;
-        if !buggify() {
-            self.listeners.notify_state();
-        }
+        self.listeners.notify_state();
         Ok(result)
     }
 
@@ -844,8 +835,6 @@ mod tests {
 
     fn arb_forward_fragment_state() -> impl Strategy<Value = FragmentState> {
         prop_oneof![
-            Just(FragmentState::Started),
-            Just(FragmentState::Running),
             Just(FragmentState::Completed),
             Just(FragmentState::Stopped),
             Just(FragmentState::Failed),

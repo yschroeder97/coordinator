@@ -8,7 +8,7 @@ NES Coordinator is a Rust-based stateful coordinator for the NebulaStream distri
 
 ## Rules
 
-- **Test timeout:** Never run any test invocation command (cargo test, cargo nextest, etc.) without a timeout of less than 1 minute.
+- **Test timeout:** Never run any test invocation command (cargo test, cargo nextest, etc.) without a Bash tool timeout of less than 1 minute.
 - **Test frequency:** Do not run tests after every small change. Tests take ~50s. Run them periodically after larger batches of changes, or when specifically asked.
 
 ## Build and Test Commands
@@ -20,8 +20,8 @@ cargo build
 # Run all tests (unit + integration, excludes simulation)
 cargo test --features testing
 
-# Run deterministic simulation tests only (with madsim, requires cargo-nextest)
-RUSTFLAGS="--cfg madsim" cargo nextest run -p coordinator --features testing --test '*'
+# Run deterministic simulation tests only (with madsim)
+RUSTFLAGS="--cfg madsim" cargo test -p coordinator --features testing --test '*'
 
 # Run a specific test
 cargo test --features testing test_name
@@ -122,4 +122,3 @@ Defined in `proto/SingleNodeWorkerRPCService.proto` and `proto/health.proto`. Au
 - **tonic/prost**: gRPC framework and protobuf
 - **proptest**: Property-based testing with `Generate` trait for type-tied strategies
 - **fail**: Failpoint injection for crash recovery testing
-- **cargo-nextest**: Test runner for simulation tests (process-per-test isolation)
